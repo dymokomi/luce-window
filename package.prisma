@@ -22,11 +22,11 @@ def package "luce-window" {
     }
 
     def native "macos" {
-        list libraries = ["objc"]
-        list frameworks = ["AppKit", "Foundation"]
+        str[] libraries = ["objc"]
+        str[] frameworks = ["AppKit", "Foundation"]
     }
 
     def native "windows" {
-        list libraries = ["user32", "ole32", "shell32"]
+        str[] libraries = ["user32", "ole32", "shell32"]
     }
 }
