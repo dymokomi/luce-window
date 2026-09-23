@@ -1,0 +1,119 @@
+#==============================================================================================
+#
+#   events - The AppKit event callbacks
+#
+#   DESCRIPTION:
+#       AppKit invokes these methods synchronously while the main thread pumps events. Queued
+#       events retain no NSEvent/NSNotification objects. AppKit's text service may allocate its
+#       own composition state while interpreting a key event.
+#
+#==============================================================================================
+
+func close_callback(object: void*, selector: void*, sender: void*) -> bool:
+    discard(selector)
+    discard(sender)
+    if let state = get_state(object):
+        state.close_requested = true
+    return false
+
+func resize_callback(object: void*, selector: void*, notification: void*):
+    discard(selector)
+    discard(notification)
+    if let state = get_state(object):
+        push_event(state, input.Event(kind = input.EventKind.resized))
+        invoke_redraw(state)
+
+func focus_callback(object: void*, selector: void*, notification: void*):
+    discard(notification)
+    if let state = get_state(object):
+        let gained = selector == sel("windowDidBecomeKey:")
+        if not gained:
+            mac_clear_marked(state)
+            state.primary_down = false
+            state.pointer_inside = false
+        push_event(state, input.Event(kind = input.EventKind.focus_gained if gained else input.EventKind.focus_lost))
+
+func view_accepts(object: void*, selector: void*) -> bool:
+    discard(object)
+    discard(selector)
+    return true
+
+func modifiers(flags: u64) -> input.Modifiers:
+    return input.Modifiers(shift = (flags & (1 << 17)) != 0, control = (flags & (1 << 18)) != 0, alt = (flags & (1 << 19)) != 0, super = (flags & (1 << 20)) != 0, caps_lock = (flags & (1 << 16)) != 0)
+
+func key_callback(object: void*, selector: void*, native: void*):
+    discard(selector)
+    let state = get_state(object) else return
+    let native_type = msg_uint(native, sel("type"))
+    var event = input.Event(kind = input.EventKind.modifiers_changed)
+    event.modifiers = modifiers(msg_uint(native, sel("modifierFlags")))
+    event.key = physical_key(msg_key(native, sel("keyCode")))
+    if native_type == 10 or native_type == 11:
+        event.kind = input.EventKind.key_down if native_type == 10 else input.EventKind.key_up
+        event.repeated = msg_bool(native, sel("isARepeat"))
+    # Composition navigation belongs to AppKit until the marked text is committed.
+    let composing = state.marked_text != none
+    if not composing:
+        push_event(state, event)
+    if native_type == 10 and state.text_input and not event.modifiers.super and not event.modifiers.control:
+        let array_class = objc_getClass("NSArray") else return
+        let events = msg_one_object(array_class, sel("arrayWithObject:"), native) else return
+        msg_object(object, sel("interpretKeyEvents:"), events)
+
+func pointer_callback(object: void*, selector: void*, native: void*):
+    discard(selector)
+    let state = get_state(object) else return
+    let native_type = msg_uint(native, sel("type"))
+    let position = msg_convert(object, sel("convertPoint:fromView:"), msg_point(native, sel("locationInWindow")), none)
+    var event = input.Event(kind = input.EventKind.pointer_moved, x = position.x, y = position.y)
+    event.modifiers = modifiers(msg_uint(native, sel("modifierFlags")))
+    if native_type == 8:
+        event.kind = input.EventKind.pointer_entered
+    elif native_type == 9:
+        state.pointer_inside = false
+        push_event(state, input.Event(kind = input.EventKind.pointer_left))
+        return
+    elif native_type == 1 or native_type == 3 or native_type == 25:
+        event.kind = input.EventKind.pointer_down
+        event.button = (u32)msg_uint(native, sel("buttonNumber"))
+    elif native_type == 2 or native_type == 4 or native_type == 26:
+        event.kind = input.EventKind.pointer_up
+        event.button = (u32)msg_uint(native, sel("buttonNumber"))
+    elif native_type == 22:
+        event.kind = input.EventKind.scroll
+        event.scroll_x = msg_double(native, sel("scrollingDeltaX"))
+        event.scroll_y = msg_double(native, sel("scrollingDeltaY"))
+        event.scroll_unit = input.ScrollUnit.points if msg_bool(native, sel("hasPreciseScrollingDeltas")) else input.ScrollUnit.lines
+    elif native_type == 30:
+        # NSEventTypeMagnify: the pinch's magnification change since the last event.
+        event.kind = input.EventKind.magnify
+        event.scroll_y = msg_double(native, sel("magnification"))
+        event.scroll_unit = input.ScrollUnit.points
+    # Tablet points (subtype 1) carry the stylus pressure; everything else presses fully.
+    if (native_type >= 1 and native_type <= 7) or native_type == 25 or native_type == 26 or native_type == 27:
+        if msg_uint(native, sel("subtype")) == 1:
+            event.pressure = msg_double(native, sel("pressure"))
+    let bounds = msg_rect(object, sel("bounds"))
+    state.pointer_inside = position.x >= 0.0 and position.y >= 0.0 and position.x < bounds.size.width and position.y < bounds.size.height
+    if event.button == 0:
+        if event.kind == input.EventKind.pointer_down: state.primary_down = true
+        if event.kind == input.EventKind.pointer_up: state.primary_down = false
+    push_event(state, event)
+
+## Hardware positions from the macOS HIToolbox virtual-key table. Zero slots
+## deliberately remain unknown (including keypad/international keys for now).
+let key_positions: u16[128] = [
+    4, 22, 7, 9, 11, 10, 29, 27, 6, 25, 0, 5, 20, 26, 8, 21,
+    28, 23, 30, 31, 32, 33, 35, 34, 46, 38, 36, 45, 37, 39, 48, 18,
+    24, 47, 12, 19, 40, 15, 13, 52, 14, 51, 49, 54, 56, 17, 16, 55,
+    43, 44, 53, 42, 0, 41, 231, 227, 225, 57, 226, 224, 229, 230, 228, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    62, 63, 64, 60, 65, 66, 0, 68, 0, 0, 0, 0, 0, 67, 0, 69,
+    0, 0, 0, 74, 75, 76, 61, 77, 59, 78, 58, 80, 79, 81, 82, 0,
+]
+
+func physical_key(code: u16) -> input.Key:
+    if code >= key_positions.length:
+        return input.Key.unknown
+    return (input.Key)key_positions[code]

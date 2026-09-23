@@ -1,0 +1,268 @@
+#==============================================================================================
+#
+#   window - The portable desktop window
+#
+#   DESCRIPTION:
+#       The portable desktop window module: creating a window, pumping its events, and
+#       leasing its presentation host to the graphics module.
+#
+#==============================================================================================
+
+import c
+import luce_window.input as input
+import memory
+import platform
+import utf8
+import thread
+import windows_text
+# mark: Errors, options and the window ========================================================
+
+## No native window backend exists for this target.
+pub let unsupported: ErrorCode = ErrorCode.package(85)
+## A window operation ran off the main thread.
+pub let wrong_thread: ErrorCode = ErrorCode.package(86)
+## The window options were rejected.
+pub let invalid_options: ErrorCode = ErrorCode.package(87)
+## A window operation failed.
+pub let failed: ErrorCode = ErrorCode.package(88)
+## A window was used after it closed.
+pub let closed: ErrorCode = ErrorCode.package(89)
+## The window's presentation host is still leased.
+pub let presentation_in_use: ErrorCode = ErrorCode.package(90)
+
+## Native windows support arm64 macOS and x86_64 Windows. The compiler selects
+## system link dependencies. Importing input alone has no window-system dependency. Other targets return
+## unsupported before entering platform code. Linux support is a later increment.
+pub func supported() -> bool:
+    return (platform.macos and platform.arm64) or (platform.windows and platform.x86_64)
+
+## Options for creating a window; each has a sensible default.
+pub struct Options:
+    ## The title-bar text.
+    pub var title: str = "Luce"
+    ## The initial content width in logical points.
+    pub var width: u32 = 800
+    ## The initial content height in logical points.
+    pub var height: u32 = 600
+    ## Whether the user may resize the window.
+    pub var resizable: bool = true
+    ## Cover the main display without chrome. The windowed frame is restored by
+    ## `set_fullscreen(false)`. Creation still opens hidden; call show afterwards.
+    pub var fullscreen: bool = false
+
+## Content extent in logical points and backing pixels. Query again after resized;
+## a move between displays can change backing pixels without changing logical size.
+pub struct Size:
+    ## The content width in logical points.
+    pub var width: f64
+    ## The content height in logical points.
+    pub var height: f64
+    ## The content width in backing pixels.
+    pub var pixel_width: f64
+    ## The content height in backing pixels.
+    pub var pixel_height: f64
+    ## The backing pixels per logical point.
+    pub var scale: f64
+
+## One owned native window. The zero value is closed. Copies alias ownership:
+## borrow this value, and destroy exactly one owner on the main thread. All
+## methods, including event pumping, require that thread. Multiple windows are
+## allowed; polling one dispatches OS events for all and queues them per window.
+## The process-global NSApplication and registered runtime classes live until exit.
+pub struct Window:
+    var state: State*?
+
+    ## Open a hidden window. Call show after setup. Titles must be valid UTF-8;
+    ## content dimensions are 1..10000 points. No graphics API is initialized.
+    pub static func open(options: Options = Options()) -> Window!:
+        try check_thread()
+        try check_extent(options.width, options.height)
+        if not utf8.valid(options.title.bytes):
+            error(invalid_options, "the window title is not valid UTF-8")
+        var opened = Window()
+        if platform.macos and platform.arm64:
+            opened = Window(state = try mac_open(options))
+        elif platform.windows:
+            opened = Window(state = try win_open(options))
+        else:
+            error(unsupported, "native windows are not implemented for this target")
+        errdefer opened.destroy()
+        if options.fullscreen:
+            try opened.set_fullscreen(true)
+        return opened
+
+    ## Make the window visible; call after setting it up.
+    pub func show() -> !:
+        let state = try self.checked()
+        if platform.macos and platform.arm64:
+            mac_show(state)
+        if platform.windows:
+            discard(ShowWindow(required(state.native), 5))
+
+    ## The window's current content extent.
+    pub func size() -> Size!:
+        let state = try self.checked()
+        if platform.macos and platform.arm64:
+            return mac_size(state)
+        if platform.windows:
+            return win_size(state)
+        error(unsupported, "native windows are not implemented for this target")
+
+    ## Resize the content to `width` by `height` logical points.
+    pub func resize(width: u32, height: u32) -> !:
+        let state = try self.checked()
+        try check_extent(width, height)
+        if platform.macos and platform.arm64:
+            mac_resize(state, width, height)
+        if platform.windows:
+            try win_resize(state, width, height)
+
+    ## Cover the main display without chrome, or restore the previous windowed
+    ## frame. Idempotent. Emits a resize event when the extent changes.
+    pub func set_fullscreen(enabled: bool) -> !:
+        let state = try self.checked()
+        if platform.macos and platform.arm64:
+            try mac_set_fullscreen(state, enabled)
+        if platform.windows:
+            try win_set_fullscreen(state, enabled)
+
+    ## Whether this window currently covers the display without chrome.
+    pub func is_fullscreen() -> bool!:
+        return (try self.checked()).fullscreen
+
+    ## Enable committed text from the active keyboard layout and input method.
+    ## Disable when no editable control has focus; this cancels pending composition.
+    pub func set_text_input(enabled: bool) -> !:
+        let state = try self.checked()
+        if state.text_input == enabled:
+            return
+        state.text_input = enabled
+        state.pending_surrogate = 0
+        if platform.macos and platform.arm64:
+            if not enabled:
+                mac_cancel_text_input(state)
+
+    ## Choose the cursor for this window's content. Native chrome and other
+    ## windows keep their own cursors. The choice survives OS cursor updates.
+    pub func set_cursor(cursor: input.Cursor) -> !:
+        let state = try self.checked()
+        if (u8)cursor > (u8)input.Cursor.not_allowed:
+            error(invalid_options, "unknown system cursor")
+        if platform.macos and platform.arm64:
+            try mac_set_cursor(state, cursor)
+        if platform.windows:
+            try win_set_cursor(state, cursor)
+
+    ## The files of the drag in progress, or of the last drop, as UTF-8 paths:
+    ## read on `drag_entered` through `drop`; replaced when the next drag enters.
+    ## At most sixteen files are kept. Empty for a drag that carries no files.
+    pub func drop_paths() -> const str[]!:
+        let state = try self.checked()
+        return state.drop_paths[..<state.drop_count]
+
+    ## Whether the application would take a drop where the pointer is now; the OS
+    ## shows the copy badge, or refuses and slides the files back, accordingly.
+    ## Answer on every drag event: the next native update reports it.
+    pub func set_drop_accepted(accepted: bool) -> !:
+        let state = try self.checked()
+        state.drop_accepted = accepted
+
+    ## The window's current cursor.
+    pub func cursor() -> input.Cursor!:
+        return (try self.checked()).cursor
+
+    ## Reserve this window for one graphics surface. Normally gpu.Surface calls
+    ## this; applications need not manage the lease themselves.
+    pub func acquire_presentation() -> Presentation!:
+        let state = try self.checked()
+        if state.presentation_held:
+            error(presentation_in_use, "the window already has a presentation surface")
+        state.presentation_held = true
+        return Presentation(state = state)
+
+    ## Register a redraw invoked while the window is being live-resized, so the
+    ## application can repaint at the new size instead of showing a stretched frame.
+    ## During a resize the OS runs a modal loop that starves the normal event pump;
+    ## this callback fires from inside it. It runs on the main thread with `context`,
+    ## and lives until replaced or the window is destroyed. Keep `context` valid for
+    ## that lifetime. The callback must not destroy or resize the window.
+    pub func set_redraw(callback: func(void*) -> unit, context: void*) -> !:
+        let state = try self.checked()
+        state.redraw = callback
+        state.redraw_context = context
+
+    ## Request closure, using the same event as the title-bar close button.
+    ## The application decides whether to destroy the window after receiving it.
+    pub func request_close() -> !:
+        let state = try self.checked()
+        state.close_requested = true
+
+    ## Return the oldest queued event, or none after a bounded nonblocking pump.
+    ## Each window holds 256 events. On exhaustion the queue is discarded and one
+    ## overflow event precedes subsequent events; close requests remain sticky.
+    ## No event holds transient AppKit storage. Call regularly for every window.
+    pub func poll() -> input.Event?!:
+        let state = try self.checked()
+        if let event = pop_event(state):
+            return event
+        if platform.macos and platform.arm64:
+            mac_pump(state)
+        if platform.windows:
+            win_pump(state)
+        return pop_event(state)
+
+    ## Block until an event is queued or `timeout_ns` elapses, then behave like poll():
+    ## return the oldest queued event, or none on a timeout or a spurious wake. A `wake()`
+    ## from another thread returns it promptly; 0 returns immediately, like poll(). The
+    ## loop re-evaluates and waits again on a none. Main thread only; poll() is unchanged.
+    pub func wait(timeout_ns: u64) -> input.Event?!:
+        let state = try self.checked()
+        if let event = pop_event(state):
+            return event
+        if platform.macos and platform.arm64:
+            mac_wait(state, timeout_ns)
+        if platform.windows:
+            win_wait(state, timeout_ns)
+        return pop_event(state)
+
+    ## Idempotent on this value. Detach callbacks before releasing native objects
+    ## and storage. Calling from another thread traps instead of leaking silently.
+    pub mutating func destroy():
+        let state = self.state else return
+        check_thread() catch failure:
+            discard(failure)
+            trap("window destruction requires the main thread")
+        self.state = none
+        if platform.macos and platform.arm64:
+            mac_destroy(state)
+        if platform.windows:
+            win_destroy(state)
+
+    func checked() -> State*!:
+        try check_thread()
+        return self.state else error(closed, "the window is closed")
+
+## Unblock a wait() in progress from ANY thread, or make the next wait() return promptly.
+## It posts one OS event and touches no main-thread window state, holds no lock and runs no
+## callback, so a finished worker thread can make the UI respond at once. Safe when no wait
+## is in progress (coalesced) and before any window opens (a no-op).
+pub func wake() -> !:
+    if not supported():
+        error(unsupported, "native windows are not implemented for this target")
+    if platform.macos and platform.arm64:
+        try mac_wake()
+    if platform.windows:
+        try win_wake()
+
+func check_thread() -> !:
+    if not supported():
+        error(unsupported, "native windows are not implemented for this target")
+    if platform.macos and platform.arm64:
+        if pthread_main_np() == 0:
+            error(wrong_thread, "window operations require the main thread")
+    if platform.windows and not thread.is_main():
+        error(wrong_thread, "window operations require the main thread")
+
+func check_extent(width: u32, height: u32) -> !:
+    if width == 0 or height == 0 or width > 10000 or height > 10000:
+        error(invalid_options, "window dimensions must be between 1 and 10000 points")

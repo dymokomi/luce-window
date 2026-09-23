@@ -1,0 +1,124 @@
+#==============================================================================================
+#
+#   queue - The window's native state and event queue
+#
+#   DESCRIPTION:
+#       Stable heap storage is shared only with synchronous main-thread OS callbacks. Keeping
+#       native pointers here, outside the portable event types, also lets every partially
+#       constructed window use the same unwind path.
+#
+#==============================================================================================
+
+struct State:
+    var native: void*?
+    var view: void*?
+    var delegate: void*?
+    var events: input.Event[256]
+    var head: usize
+    var count: usize
+    var overflowed: bool
+    var close_requested: bool
+    var presentation_held: bool
+    var destroyed: bool
+    var text_input: bool
+    var pending_surrogate: u16
+    var pointer_tracking: bool
+    var cursor: input.Cursor
+    var native_cursor: void*?
+    var pointer_inside: bool
+    var primary_down: bool
+    var marked_text: void*?
+    var marked_selection: usize
+    var marked_length: usize
+    var redraw: (func(void*) -> unit)?
+    var redraw_context: void*?
+    var fullscreen: bool
+    var saved_x: f64
+    var saved_y: f64
+    var saved_width: f64
+    var saved_height: f64
+    var saved_style: u64
+    var saved_level: i64
+    ## The files of the drag in progress, or of the last drop, as NUL-terminated
+    ## UTF-8 paths on the heap; whether the application takes a drop where the
+    ## pointer is now.
+    var drop_paths: str[16]
+    var drop_count: usize
+    var drop_accepted: bool
+    ## Windows: the OLE drop target registered for this window.
+    var drop_target: void*?
+
+## Committed characters own their value. Control keys remain physical events;
+## no queued event borrows native string storage or a composition buffer.
+func push_scalar(state: State*, scalar: u32):
+    if scalar >= 32 and scalar != 127 and scalar <= 0x10FFFF and not (scalar >= 0xD800 and scalar <= 0xDFFF):
+        push_event(state, input.Event(kind = input.EventKind.text_input, codepoint = scalar))
+
+func push_utf16(state: State*, code: u16):
+    if code >= 0xD800 and code <= 0xDBFF:
+        if state.pending_surrogate != 0:
+            push_scalar(state, 0xFFFD)
+        state.pending_surrogate = code
+        return
+    if code >= 0xDC00 and code <= 0xDFFF:
+        let high = state.pending_surrogate
+        state.pending_surrogate = 0
+        push_scalar(state, 0x10000 + ((u32)high - 0xD800) * 1024 + (u32)code - 0xDC00 if high != 0 else 0xFFFD)
+        return
+    if state.pending_surrogate != 0:
+        state.pending_surrogate = 0
+        push_scalar(state, 0xFFFD)
+    push_scalar(state, (u32)code)
+
+## Invoke the application's live-resize redraw, if one is registered, so the window
+## repaints at its new size from inside the OS resize loop instead of stretching a
+## stale frame. Runs synchronously on the main thread while the resize is tracked.
+func invoke_redraw(state: State*):
+    if let redraw = state.redraw:
+        if let context = state.redraw_context:
+            redraw(context)
+
+func push_event(state: State*, event: input.Event):
+    if state.count == state.events.length:
+        state.head = 0
+        state.count = 0
+        state.overflowed = true
+    state.events[(state.head + state.count) % state.events.length] = event
+    state.count += 1
+
+func pop_event(state: State*) -> input.Event?:
+    if state.close_requested:
+        state.close_requested = false
+        return input.Event(kind = input.EventKind.close_requested)
+    if state.overflowed:
+        state.overflowed = false
+        return input.Event(kind = input.EventKind.overflow)
+    if state.count == 0:
+        return none
+    let event = state.events[state.head]
+    state.head = (state.head + 1) % state.events.length
+    state.count -= 1
+    return event
+
+# mark: Dropped paths ==========================================================================
+
+## Forget the last drag's paths.
+func clear_drop_paths(state: State*):
+    for index in 0..<state.drop_count:
+        let path = state.drop_paths[index]
+        free(u8[]((u8*)path.bytes.data, path.length + 1)) in memory.heap
+        state.drop_paths[index] = ""
+    state.drop_count = 0
+
+## Keep one dragged path; beyond sixteen files the rest are left out.
+func add_drop_path(state: State*, path: str):
+    if state.drop_count >= state.drop_paths.length or path.length == 0:
+        return
+    let copy = alloc u8[path.length + 1] in memory.heap catch failure:
+        discard(failure)
+        return
+    for index in 0..<path.length:
+        copy[index] = path.bytes[index]
+    copy[path.length] = 0
+    state.drop_paths[state.drop_count] = (str)copy[..<path.length]
+    state.drop_count += 1

@@ -1,0 +1,74 @@
+#==============================================================================================
+#
+#   presentation - The exclusive graphics-host lease
+#
+#   DESCRIPTION:
+#       Exclusive graphics-host lease. Copies alias ownership: destroy one owner on the main
+#       thread. Closing the Window invalidates queries immediately, while retaining its native
+#       host until this lease is destroyed. This permits graphics resources to be torn down
+#       safely in either window/surface destruction order.
+#
+#==============================================================================================
+
+## An exclusive lease on a window's native graphics host; copies alias ownership.
+pub struct Presentation:
+    var state: State*?
+
+    ## The window's content extent in logical points and backing pixels.
+    pub func size() -> Size!:
+        let state = try self.checked()
+        if platform.macos and platform.arm64:
+            return mac_size(state)
+        if platform.windows:
+            return win_size(state)
+        error(unsupported, "native windows are not implemented for this target")
+
+    ## Hidden or minimized windows should not acquire display buffers. Occlusion
+    ## alone does not suspend rendering: a covered window may become visible.
+    pub func visible() -> bool!:
+        let state = try self.checked()
+        if platform.macos and platform.arm64:
+            let native = required(state.native)
+            return msg_bool(native, sel("isVisible")) and not msg_bool(native, sel("isMiniaturized"))
+        if platform.windows:
+            let native = required(state.native)
+            return IsWindowVisible(native) != 0 and IsIconic(native) == 0
+        error(unsupported, "native windows are not implemented for this target")
+
+    ## Platform bridge for graphics backends, not a drawing API. The borrowed
+    ## NSView remains allocated until lease destruction, but must not be used
+    ## after Window.destroy. Never release it or replace its input callbacks.
+    ## Future window backends provide their own host accessors alongside this one.
+    pub func macos_view() -> void*!:
+        let state = try self.checked()
+        if platform.macos and platform.arm64:
+            return required(state.view)
+        error(unsupported, "this window has no macOS view")
+
+    ## Borrowed HWND for graphics backends, valid until window destruction.
+    pub func windows_handle() -> void*!:
+        let state = try self.checked()
+        if platform.windows:
+            return required(state.native)
+        error(unsupported, "this window has no Windows handle")
+
+    ## Release the lease on the main thread.
+    pub mutating func destroy():
+        let state = self.state else return
+        check_thread() catch failure:
+            discard(failure)
+            trap("presentation lease destruction requires the main thread")
+        self.state = none
+        state.presentation_held = false
+        if platform.macos and platform.arm64:
+            if state.destroyed:
+                mac_free(state)
+        if platform.windows and state.destroyed:
+            win_free(state)
+
+    func checked() -> State*!:
+        try check_thread()
+        let state = self.state else error(closed, "the presentation lease is closed")
+        if state.destroyed:
+            error(closed, "the presentation window is closed")
+        return state

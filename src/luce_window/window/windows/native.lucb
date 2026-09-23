@@ -1,0 +1,218 @@
+#==============================================================================================
+#
+#   native - The Win32 window backend
+#
+#   DESCRIPTION:
+#       The Win32 window class, creation and message pump behind the portable window.
+#
+#==============================================================================================
+
+from windows_abi import MultiByteToWideChar, GetModuleHandleW
+
+# mark: Win32 bindings ========================================================================
+
+## Win32 types use fixed widths: LONG remains i32 on 64-bit Windows.
+extern struct WinClass:
+    size: u32
+    style: u32
+    procedure: func(void*, u32, usize, isize) -> isize
+    class_extra: i32
+    window_extra: i32
+    instance: void*?
+    icon: void*?
+    cursor: void*?
+    brush: void*?
+    menu: u16*?
+    name: u16*?
+    small_icon: void*?
+
+extern struct WinRect:
+    left: i32
+    top: i32
+    right: i32
+    bottom: i32
+
+extern struct WinPoint:
+    x: i32
+    y: i32
+
+extern struct WinMessage:
+    window: void*?
+    message: u32
+    word: usize
+    value: isize
+    time: u32
+    point: WinPoint
+    private_value: u32
+
+extern func RegisterClassExW(info: WinClass*) -> u16
+extern func LoadCursorW(instance: void*?, name: u16*) -> void*?
+extern func CreateWindowExW(extra: u32, kind: u16*, title: u16*, style: u32, x: i32, y: i32, width: i32, height: i32, parent: void*?, menu: void*?, instance: void*, parameter: void*) -> void*?
+extern func DestroyWindow(window: void*) -> i32
+extern func ShowWindow(window: void*, command: i32) -> i32
+extern func IsWindowVisible(window: void*) -> i32
+extern func IsIconic(window: void*) -> i32
+extern func DefWindowProcW(window: void*, message: u32, word: usize, value: isize) -> isize
+extern func GetWindowLongPtrW(window: void*, index: i32) -> isize
+extern func SetWindowLongPtrW(window: void*, index: i32, value: isize) -> isize
+extern func GetClientRect(window: void*, rect: WinRect*) -> i32
+extern func GetDpiForWindow(window: void*) -> u32
+extern func GetDpiForSystem() -> u32
+extern func SetProcessDpiAwarenessContext(context: void*) -> i32
+extern func AdjustWindowRectExForDpi(rect: WinRect*, style: u32, menu: i32, extra: u32, dpi: u32) -> i32
+extern func SetWindowPos(window: void*, after: void*?, x: i32, y: i32, width: i32, height: i32, flags: u32) -> i32
+extern func PeekMessageW(message: WinMessage*, window: void*?, first: u32, last: u32, remove: u32) -> i32
+extern func TranslateMessage(message: WinMessage*) -> i32
+extern func DispatchMessageW(message: WinMessage*) -> isize
+extern func MsgWaitForMultipleObjectsEx(count: u32, handles: void*?, milliseconds: u32, mask: u32, flags: u32) -> u32
+extern func PostThreadMessageW(thread: u32, message: u32, word: usize, value: isize) -> i32
+extern func GetCurrentThreadId() -> u32
+extern func GetWindowRect(window: void*, rect: WinRect*) -> i32
+extern func MonitorFromWindow(window: void*, flags: u32) -> void*?
+
+extern struct WinMonitor:
+    size: u32
+    monitor: WinRect
+    work: WinRect
+    flags: u32
+
+extern func GetMonitorInfoW(monitor: void*, info: WinMonitor*) -> i32
+
+var win_class_atom: u16
+var win_class_name: u16[11] = [76, 117, 99, 101, 87, 105, 110, 100, 111, 119, 0]
+# The UI thread id, published once at open so wake() can post to it from any thread.
+var win_ui_thread: @u32
+
+# mark: The window ============================================================================
+
+func win_setup() -> !:
+    if win_class_atom != 0:
+        return
+    discard(SetProcessDpiAwarenessContext((void*)(isize)-4))
+    var info = WinClass(size = (u32)sizeof(WinClass), procedure = win_callback,
+                        instance = GetModuleHandleW(none), cursor = LoadCursorW(none, (u16*)32512),
+                        brush = (void*)6, name = &win_class_name[0])
+    win_class_atom = RegisterClassExW(&info)
+    if win_class_atom == 0:
+        error(failed, "the native window class could not be registered")
+
+func win_open(options: Options) -> State*!:
+    try win_setup()
+    win_ui_thread.store(GetCurrentThreadId(), .release)
+    let state = try new State() in memory.heap
+    errdefer win_destroy(state)
+    state.native_cursor = try win_cursor(input.Cursor.arrow)
+    let title = try alloc u16[options.title.length + 1]
+    defer free(title)
+    var count: i32 = 0
+    if options.title.length > 0:
+        count = MultiByteToWideChar(65001, 8, (c.str)options.title, (i32)options.title.length, title.data, (i32)title.length - 1)
+        if count == 0:
+            error(invalid_options, "the window title could not be converted to UTF-16")
+    title[(usize)count] = 0
+    let style: u32 = 13565952 if options.resizable else 13238272
+    let dpi = GetDpiForSystem()
+    var rect = WinRect(right = (i32)((u64)options.width * (u64)dpi // 96), bottom = (i32)((u64)options.height * (u64)dpi // 96))
+    if AdjustWindowRectExForDpi(&rect, style, 0, 0, dpi) == 0:
+        error(failed, "the native window dimensions could not be calculated")
+    let native = CreateWindowExW(0, &win_class_name[0], title.data, style, -2147483648, -2147483648,
+                                 rect.right - rect.left, rect.bottom - rect.top, none, none, GetModuleHandleW(none), (void*)state) else error(failed, "the native window could not be created")
+    state.native = native
+    try win_register_drops(state)
+    return state
+
+func win_size(state: State*) -> Size:
+    let native = required(state.native)
+    var rect: WinRect
+    discard(GetClientRect(native, &rect))
+    let dpi = GetDpiForWindow(native)
+    let scale = (f64)dpi / 96.0 if dpi > 0 else 1.0
+    let width = (f64)(rect.right - rect.left)
+    let height = (f64)(rect.bottom - rect.top)
+    return Size(width = width / scale, height = height / scale, pixel_width = width, pixel_height = height, scale = scale)
+
+func win_resize(state: State*, width: u32, height: u32) -> !:
+    let native = required(state.native)
+    let dpi = GetDpiForWindow(native)
+    let style = (u32)GetWindowLongPtrW(native, -16)
+    var rect = WinRect(right = (i32)((u64)width * (u64)dpi // 96), bottom = (i32)((u64)height * (u64)dpi // 96))
+    if AdjustWindowRectExForDpi(&rect, style, 0, 0, dpi) == 0 or SetWindowPos(native, none, 0, 0, rect.right - rect.left, rect.bottom - rect.top, 22) == 0:
+        error(failed, "the native window could not be resized")
+
+## Cover the nearest monitor without chrome, or restore the saved windowed
+## placement. Idempotent. SetWindowPos emits WM_SIZE, which queues a resize.
+func win_set_fullscreen(state: State*, enabled: bool) -> !:
+    if state.fullscreen == enabled:
+        return
+    let native = required(state.native)
+    if enabled:
+        var placed: WinRect
+        if GetWindowRect(native, &placed) == 0:
+            error(failed, "the native window placement could not be read")
+        let monitor = MonitorFromWindow(native, 2) else error(failed, "no display is available for fullscreen")
+        var info = WinMonitor(size = (u32)sizeof(WinMonitor))
+        if GetMonitorInfoW(monitor, &info) == 0:
+            error(failed, "the native monitor could not be queried")
+        state.saved_x = (f64)placed.left
+        state.saved_y = (f64)placed.top
+        state.saved_width = (f64)(placed.right - placed.left)
+        state.saved_height = (f64)(placed.bottom - placed.top)
+        state.saved_style = (u64)GetWindowLongPtrW(native, -16)
+        discard(SetWindowLongPtrW(native, -16, (isize)(u64)(0x80000000 | 0x10000000)))
+        let area = info.monitor
+        if SetWindowPos(native, none, area.left, area.top, area.right - area.left, area.bottom - area.top, 32) == 0:
+            discard(SetWindowLongPtrW(native, -16, (isize)state.saved_style))
+            error(failed, "the native window could not enter fullscreen")
+        state.fullscreen = true
+    else:
+        discard(SetWindowLongPtrW(native, -16, (isize)state.saved_style))
+        if SetWindowPos(native, none, (i32)state.saved_x, (i32)state.saved_y, (i32)state.saved_width, (i32)state.saved_height, 32) == 0:
+            error(failed, "the native window could not leave fullscreen")
+        state.fullscreen = false
+
+# mark: The event pump ========================================================================
+
+func win_pump(waiting: State*):
+    var message: WinMessage
+    var count: usize = 0
+    while count < 256 and PeekMessageW(&message, none, 0, 0, 1) != 0:
+        discard(TranslateMessage(&message))
+        discard(DispatchMessageW(&message))
+        count += 1
+        if waiting.count > 0 or waiting.close_requested or waiting.overflowed:
+            break
+
+## Block up to `timeout_ns` until input is available (a wake() posts a message), then drain
+## like win_pump. A large timeout clamps to INFINITE; the resolution is milliseconds.
+func win_wait(waiting: State*, timeout_ns: u64):
+    let ms64 = (timeout_ns + 999999) // 1000000
+    let milliseconds: u32 = 0xFFFFFFFF if ms64 >= 0xFFFFFFFF else (u32)ms64
+    # QS_ALLINPUT | MWMO_INPUTAVAILABLE: wake on any queued message, including one already present.
+    discard(MsgWaitForMultipleObjectsEx(0, none, milliseconds, 0x04FF, 0x0004))
+    win_pump(waiting)
+
+## Post WM_NULL to the UI thread so a blocked win_wait() returns. PostThreadMessageW is
+## thread-safe; it reads only the atomically-published thread id and takes no lock. The
+## message is ignored on dispatch. A no-op before a window opens.
+func win_wake() -> !:
+    let thread_id = win_ui_thread.load(.acquire)
+    if thread_id == 0:
+        return
+    discard(PostThreadMessageW(thread_id, 0, 0, 0))
+
+# mark: Teardown ==============================================================================
+
+func win_destroy(state: State*):
+    state.destroyed = true
+    if let native = state.native:
+        discard(ShowWindow(native, 0))
+    if not state.presentation_held:
+        win_free(state)
+
+func win_free(state: State*):
+    win_revoke_drops(state)
+    clear_drop_paths(state)
+    if let native = state.native:
+        discard(SetWindowLongPtrW(native, -21, 0))
+        discard(DestroyWindow(native))
+    free(state) in memory.heap

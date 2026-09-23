@@ -1,0 +1,99 @@
+#==============================================================================================
+#
+#   objc - The minimal AppKit ABI
+#
+#   DESCRIPTION:
+#       Minimal AppKit ABI, kept private. Each objc_msgSend alias has the exact method
+#       signature: in particular NSRect is an aggregate, never flattened into scalars. This
+#       backend is arm64-only; do not reuse these dispatch declarations for an architecture
+#       requiring objc_msgSend_stret without a separate ABI review.
+#
+#==============================================================================================
+
+extern struct LuceWindowMacPoint:
+    x: f64
+    y: f64
+
+extern struct LuceWindowMacExtent:
+    width: f64
+    height: f64
+
+extern struct LuceWindowMacRect:
+    origin: LuceWindowMacPoint
+    size: LuceWindowMacExtent
+
+extern struct LuceWindowMacRange:
+    location: usize
+    length: usize
+
+extern func pthread_main_np() -> i32
+extern func objc_getClass(name: c.str) -> void*?
+extern func sel_registerName(name: c.str) -> void*
+extern func objc_allocateClassPair(parent: void*, name: c.str, extra: usize) -> void*?
+extern func objc_registerClassPair(native_type: void*)
+extern func objc_disposeClassPair(native_type: void*)
+extern func objc_getProtocol(name: c.str) -> void*?
+extern func class_addProtocol(native_type: void*, protocol: void*) -> bool
+extern func class_addIvar(native_type: void*, name: c.str, size: usize, alignment: u8, encoding: c.str) -> bool
+extern func class_addMethod(native_type: void*, selector: void*, implementation: void*, encoding: c.str) -> bool
+extern func object_setInstanceVariable(object: void*, name: c.str, value: void*?) -> void*?
+extern func object_getInstanceVariable(object: void*, name: c.str, value: void*?*) -> void*?
+extern func objc_autoreleasePoolPush() -> void*
+extern func objc_autoreleasePoolPop(pool: void*)
+extern var NSDefaultRunLoopMode: void*
+extern var NSApplicationDidFinishLaunchingNotification: void*
+extern func msg_ptr as "objc_msgSend"(object: void*, selector: void*) -> void*?
+extern func msg_void as "objc_msgSend"(object: void*, selector: void*)
+extern func msg_object as "objc_msgSend"(object: void*, selector: void*, value: void*?)
+extern func msg_bool_arg as "objc_msgSend"(object: void*, selector: void*, value: bool)
+extern func msg_bool_object as "objc_msgSend"(object: void*, selector: void*, value: void*?) -> bool
+extern func msg_bool as "objc_msgSend"(object: void*, selector: void*) -> bool
+extern func msg_uint as "objc_msgSend"(object: void*, selector: void*) -> u64
+extern func msg_key as "objc_msgSend"(object: void*, selector: void*) -> u16
+extern func msg_character as "objc_msgSend"(object: void*, selector: void*, index: usize) -> u16
+extern func msg_one_object as "objc_msgSend"(object: void*, selector: void*, value: void*) -> void*?
+extern func msg_double as "objc_msgSend"(object: void*, selector: void*) -> f64
+extern func msg_policy as "objc_msgSend"(object: void*, selector: void*, policy: i64) -> bool
+extern func msg_rect as "objc_msgSend"(object: void*, selector: void*) -> LuceWindowMacRect
+extern func msg_backing as "objc_msgSend"(object: void*, selector: void*, rect: LuceWindowMacRect) -> LuceWindowMacRect
+extern func msg_point as "objc_msgSend"(object: void*, selector: void*) -> LuceWindowMacPoint
+extern func msg_convert as "objc_msgSend"(object: void*, selector: void*, point: LuceWindowMacPoint, view: void*?) -> LuceWindowMacPoint
+extern func msg_extent as "objc_msgSend"(object: void*, selector: void*, size: LuceWindowMacExtent)
+extern func msg_init_window as "objc_msgSend"(object: void*, selector: void*, rect: LuceWindowMacRect, style: u64, backing: u64, deferred: bool) -> void*?
+extern func msg_init_view as "objc_msgSend"(object: void*, selector: void*, rect: LuceWindowMacRect) -> void*?
+extern func msg_init_tracking as "objc_msgSend"(object: void*, selector: void*, rect: LuceWindowMacRect, options: u64, owner: void*, user_info: void*?) -> void*?
+extern func msg_init_text as "objc_msgSend"(object: void*, selector: void*, bytes: const u8*, length: usize, encoding: u64) -> void*?
+extern func msg_next as "objc_msgSend"(object: void*, selector: void*, mask: u64, until: void*, mode: void*, dequeue: bool) -> void*?
+extern func msg_interval as "objc_msgSend"(object: void*, selector: void*, seconds: f64) -> void*?
+extern func msg_observe as "objc_msgSend"(object: void*, selector: void*, observer: void*, callback: void*, name: void*, sender: void*)
+extern func msg_post as "objc_msgSend"(object: void*, selector: void*, event: void*, first: bool)
+extern func msg_wakeup as "objc_msgSend"(object: void*, selector: void*, kind: u64, point: LuceWindowMacPoint, flags: u64, time: f64, window: i64, context: void*?, subtype: i16, first: i64, second: i64) -> void*?
+extern func msg_i64 as "objc_msgSend"(object: void*, selector: void*) -> i64
+extern func msg_u64_arg as "objc_msgSend"(object: void*, selector: void*, value: u64)
+extern func msg_i64_arg as "objc_msgSend"(object: void*, selector: void*, value: i64)
+extern func msg_set_frame as "objc_msgSend"(object: void*, selector: void*, rect: LuceWindowMacRect, display: bool)
+
+func sel(name: c.str) -> void*:
+    return sel_registerName(name)
+
+func native_class(name: c.str) -> void*!:
+    return objc_getClass(name) else error(failed, "a required AppKit class is unavailable; link AppKit and Foundation")
+
+func required(object: void*?) -> void*:
+    return object else trap("the native window lost an owned object")
+
+func get_state(object: void*) -> State*?:
+    var pointer: void*?
+    discard(object_getInstanceVariable(object, "luceState", &pointer))
+    let value = pointer else return none
+    return (State*)value
+
+func set_state(object: void*, state: State*?):
+    if let pointer = state:
+        discard(object_setInstanceVariable(object, "luceState", (void*)pointer))
+    else:
+        discard(object_setInstanceVariable(object, "luceState", none))
+
+func add_method(native_type: void*, name: c.str, implementation: void*, encoding: c.str) -> !:
+    if not class_addMethod(native_type, sel(name), implementation, encoding):
+        error(failed, "could not register a native window callback")

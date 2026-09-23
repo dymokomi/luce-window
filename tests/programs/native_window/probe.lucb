@@ -1,0 +1,222 @@
+import c
+import input
+import window
+import native
+import platform
+import thread
+import time
+
+## Wake the UI loop from another thread after a short delay (spec §8 acceptance).
+func waker(context: void*?):
+    discard(context)
+    thread.sleep(50)
+    window.wake() catch failure:
+        discard(failure)
+        trap("window.wake() from a worker thread failed")
+
+func wrong_thread(context: void*?):
+    let pointer = context else trap("missing test context")
+    let rejected = (bool*)pointer
+    var surface = window.Window.open() catch failure:
+        assert(failure.code == window.wrong_thread)
+        *rejected = true
+        var empty: window.Window
+        recover empty
+    surface.destroy()
+
+func flush(surface: window.Window*) -> !:
+    var count: usize = 0
+    while let event = try surface.poll():
+        discard(event)
+        count += 1
+        assert(count < 4096)
+
+func expect(surface: window.Window*, kind: input.EventKind) -> input.Event!:
+    var count: usize = 0
+    while count < 2048:
+        if let event = try surface.poll():
+            if event.kind == kind:
+                return event
+        thread.sleep(1)
+        count += 1
+    print(f"missing event kind {(u8)kind}")
+    trap("expected a native window event")
+
+pub func main(arguments: str[]) -> i32!:
+    if not platform.macos or not platform.arm64:
+        var rejected = false
+        var surface = window.Window.open() catch failure:
+            assert(failure.code == window.unsupported)
+            rejected = true
+            var empty: window.Window
+            recover empty
+        surface.destroy()
+        assert(rejected and not window.supported())
+        print("ok unsupported window target")
+        return 0
+    if platform.macos and platform.arm64:
+        var rejected = false
+        var worker = try thread.spawn(wrong_thread, &rejected)
+        try worker.join()
+        assert(rejected)
+        rejected = false
+        var invalid = window.Window.open(window.Options(width = 0)) catch failure:
+            assert(failure.code == window.invalid_options)
+            rejected = true
+            var empty: window.Window
+            recover empty
+        invalid.destroy()
+        assert(rejected)
+        var zero: window.Window
+        rejected = false
+        discard(zero.poll() catch failure:
+            assert(failure.code == window.closed)
+            rejected = true
+            recover none)
+        assert(rejected)
+        zero.destroy()
+        rejected = false
+        zero.set_cursor(input.Cursor.text) catch failure:
+            assert(failure.code == window.closed)
+            rejected = true
+        assert(rejected)
+        # wake() is a thread-safe no-op before any window opens; wait() on a closed window
+        # is rejected exactly like poll().
+        try window.wake()
+        rejected = false
+        discard(zero.wait(0) catch failure:
+            assert(failure.code == window.closed)
+            rejected = true
+            recover none)
+        assert(rejected)
+        if arguments.length < 2 or arguments[1] != "gui":
+            print("ok window contracts without WindowServer")
+            return 0
+        let pool = native.pool()
+        defer native.drain(pool)
+        var first = try window.Window.open(window.Options(title = "Luce test A", width = 320, height = 240))
+        defer first.destroy()
+        var second = try window.Window.open(window.Options(title = "Luce test B", width = 400, height = 300, resizable = false))
+        defer second.destroy()
+        try second.show()
+        try first.show()
+        try flush(&first)
+        # A wake() from another thread returns a blocked wait() promptly: the worker sleeps
+        # ~50 ms then wakes; wait's one-hour budget must not be what ends it.
+        var waker_thread = try thread.spawn(waker, none)
+        let started = time.now()
+        discard(try first.wait(3600000000000))
+        try waker_thread.join()
+        assert(time.since(started) < 5000000000)
+        try flush(&first)
+        native.focus_notification(native.find("Luce test A"), true)
+        discard(try expect(&first, input.EventKind.focus_gained))
+        native.focus_notification(native.find("Luce test A"), false)
+        discard(try expect(&first, input.EventKind.focus_lost))
+        let initial = try first.size()
+        assert(initial.width == 320.0 and initial.height == 240.0)
+        assert(initial.scale >= 1.0 and initial.pixel_width == initial.width * initial.scale)
+        assert(initial.pixel_height == initial.height * initial.scale)
+        try flush(&first)
+        try flush(&second)
+        try first.resize(512, 384)
+        discard(try expect(&first, input.EventKind.resized))
+        let resized = try first.size()
+        assert(resized.width == 512.0 and resized.height == 384.0)
+        assert((try second.size()).width == 400.0)
+        let a = native.find("Luce test A")
+        let b = native.find("Luce test B")
+        # Per-window choices survive native cursor-update events and do not
+        # depend on a GPU frame or changing the actual desktop pointer position.
+        let names: c.str[8] = ["arrowCursor", "IBeamCursor", "pointingHandCursor", "resizeLeftRightCursor", "resizeUpDownCursor", "openHandCursor", "closedHandCursor", "operationNotAllowedCursor"]
+        for index in 0..<names.length:
+            try first.set_cursor((input.Cursor)(u8)index)
+            assert((try first.cursor()) == (input.Cursor)(u8)index)
+            native.cursor_update(a)
+            assert(native.cursor_is(names[index]))
+            native.cursor_update(b)
+            assert(native.cursor_is("arrowCursor"))
+        try first.set_cursor(input.Cursor.arrow)
+        rejected = false
+        first.set_cursor((input.Cursor)255) catch failure:
+            assert(failure.code == window.invalid_options)
+            rejected = true
+        assert(rejected and (try first.cursor()) == input.Cursor.arrow)
+        try flush(&first)
+        native.key(a, 10, 0, true)
+        let key = try expect(&first, input.EventKind.key_down)
+        assert(key.key == input.Key.a and key.modifiers.shift and key.repeated)
+        native.key(a, 11, 0)
+        assert((try expect(&first, input.EventKind.key_up)).key == input.Key.a)
+        native.key(b, 10, 53, direct = true)
+        let second_key = try expect(&second, input.EventKind.key_down)
+        assert(second_key.key == input.Key.escape)
+        native.key(b, 12, 56, direct = true)
+        let changed = try expect(&second, input.EventKind.modifiers_changed)
+        assert(changed.key == input.Key.left_shift and changed.modifiers.shift)
+        native.key(b, 10, 127, direct = true)
+        assert((try expect(&second, input.EventKind.key_down)).key == input.Key.unknown)
+        try first.set_text_input(true)
+        native.commit_text(a, "Abé😀\n")
+        for scalar in [65, 98, 233, 128512]:
+            assert((try expect(&first, input.EventKind.text_input)).codepoint == (u32)scalar)
+        assert((try first.poll()) == none)
+        native.typed_key(a, "a")
+        discard(try expect(&first, input.EventKind.key_down))
+        assert((try expect(&first, input.EventKind.text_input)).codepoint == 97)
+        native.composition(a, "e")
+        assert(native.composing(a))
+        native.commit_text(a, "é")
+        assert(not native.composing(a))
+        assert((try expect(&first, input.EventKind.text_input)).codepoint == 233)
+        native.composition(a, "unfinished")
+        try first.set_text_input(false)
+        assert(not native.composing(a))
+        native.commit_text(a, "ignored")
+        assert((try first.poll()) == none)
+        native.mouse(a, 1, 12.0, 20.0)
+        let click = try expect(&first, input.EventKind.pointer_down)
+        assert(click.button == 0 and click.x == 12.0 and click.y == 364.0)
+        native.mouse(a, 2, 12.0, 20.0)
+        discard(try expect(&first, input.EventKind.pointer_up))
+        native.pointer_boundary(a, true)
+        let entered = try expect(&first, input.EventKind.pointer_entered)
+        assert(entered.x == 12.0 and entered.y == 364.0)
+        native.pointer_boundary(a, false)
+        discard(try expect(&first, input.EventKind.pointer_left))
+        native.scroll(a, true)
+        let precise = try expect(&first, input.EventKind.scroll)
+        assert(precise.scroll_unit == input.ScrollUnit.points and precise.scroll_x == -2.0 and precise.scroll_y == 3.0)
+        native.scroll(a, false)
+        let lines = try expect(&first, input.EventKind.scroll)
+        assert(lines.scroll_unit == input.ScrollUnit.lines and lines.scroll_x == -2.0 and lines.scroll_y == 3.0)
+        try flush(&first)
+        var i: usize = 0
+        while i < 600:
+            native.key(a, 10, 0, direct = true)
+            i += 1
+        native.close(a)
+        let close = try first.poll() else trap("close request was lost during overflow")
+        assert(close.kind == input.EventKind.close_requested)
+        let overflow = try first.poll() else trap("overflow was not reported")
+        assert(overflow.kind == input.EventKind.overflow)
+        let retained = try first.poll() else trap("post-overflow input was not retained")
+        assert(retained.kind == input.EventKind.key_down)
+        # A close request does not destroy the window; the application owns that decision.
+        assert((try first.size()).width == 512.0)
+        first.destroy()
+        first.destroy()
+        native.key(b, 10, 0, direct = true)
+        discard(try expect(&second, input.EventKind.key_down))
+        try second.request_close()
+        assert((try expect(&second, input.EventKind.close_requested)).kind == input.EventKind.close_requested)
+        second.destroy()
+        # Repeated creation reuses the runtime classes without retaining dead state.
+        i = 0
+        while i < 12:
+            var again = try window.Window.open(window.Options(title = ""))
+            assert((try again.size()).width == 800.0)
+            again.destroy()
+            i += 1
+        print("ok native window lifecycle, ABI, input, isolation, and overflow")
+    return 0

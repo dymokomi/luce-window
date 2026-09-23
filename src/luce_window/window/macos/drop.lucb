@@ -1,0 +1,98 @@
+#==============================================================================================
+#
+#   drop - Files dragged onto the window from other applications
+#
+#   DESCRIPTION:
+#       The content view is an NSDraggingDestination for file URLs. AppKit calls these methods
+#       synchronously while the main thread pumps events: each queues a portable drag event at
+#       the pointer and answers with the operation the application last chose, so the OS badge
+#       follows what the application decided one event before. The dragged paths are copied
+#       into State and stay there until the next drag enters.
+#
+#==============================================================================================
+
+# mark: Registration ===========================================================================
+
+extern func msg_array_with as "objc_msgSend"(array_type: void*, selector: void*, object: void*) -> void*?
+extern func msg_read_objects as "objc_msgSend"(object: void*, selector: void*, classes: void*, options: void*?) -> void*?
+extern func msg_object_at as "objc_msgSend"(object: void*, selector: void*, index: u64) -> void*?
+extern func msg_file_path as "objc_msgSend"(object: void*, selector: void*) -> const u8*?
+
+## The drag callbacks on the view class.
+func mac_register_drop_methods(native_type: void*) -> !:
+    try add_method(native_type, "draggingEntered:", (void*)drag_entered_callback, "Q@:@")
+    try add_method(native_type, "draggingUpdated:", (void*)drag_updated_callback, "Q@:@")
+    try add_method(native_type, "draggingExited:", (void*)drag_exited_callback, "v@:@")
+    try add_method(native_type, "prepareForDragOperation:", (void*)drag_prepare_callback, "B@:@")
+    try add_method(native_type, "performDragOperation:", (void*)drag_perform_callback, "B@:@")
+
+## Accept file URLs dragged onto `view`.
+func mac_accept_file_drops(view: void*) -> !:
+    let text_allocated = msg_ptr(try native_class("NSString"), sel("alloc")) else error(failed, "could not allocate a pasteboard type")
+    let kind = "public.file-url"
+    let type_name = msg_init_text(text_allocated, sel("initWithBytes:length:encoding:"), kind.bytes.data, kind.length, 4) else error(failed, "could not name the pasteboard type")
+    defer msg_void(type_name, sel("release"))
+    let types = msg_array_with(try native_class("NSArray"), sel("arrayWithObject:"), type_name) else error(failed, "could not list the pasteboard types")
+    msg_object(view, sel("registerForDraggedTypes:"), types)
+
+# mark: Callbacks ==============================================================================
+
+## NSDragOperationCopy when the application takes the drop here, else none.
+func drop_operation(state: State*) -> u64:
+    return 1 if state.drop_accepted and state.drop_count > 0 else 0
+
+func drag_entered_callback(object: void*, selector: void*, sender: void*) -> u64:
+    discard(selector)
+    let state = get_state(object) else return 0
+    read_drop_paths(state, sender)
+    # Until the application answers, a drag carrying files is taken.
+    state.drop_accepted = state.drop_count > 0
+    push_drag(state, object, sender, input.EventKind.drag_entered)
+    return drop_operation(state)
+
+func drag_updated_callback(object: void*, selector: void*, sender: void*) -> u64:
+    discard(selector)
+    let state = get_state(object) else return 0
+    push_drag(state, object, sender, input.EventKind.drag_moved)
+    return drop_operation(state)
+
+func drag_exited_callback(object: void*, selector: void*, sender: void*):
+    discard(selector)
+    discard(sender)
+    let state = get_state(object) else return
+    push_event(state, input.Event(kind = input.EventKind.drag_left))
+
+func drag_prepare_callback(object: void*, selector: void*, sender: void*) -> bool:
+    discard(selector)
+    discard(sender)
+    let state = get_state(object) else return false
+    return drop_operation(state) != 0
+
+func drag_perform_callback(object: void*, selector: void*, sender: void*) -> bool:
+    discard(selector)
+    let state = get_state(object) else return false
+    if drop_operation(state) == 0:
+        return false
+    push_drag(state, object, sender, input.EventKind.drop)
+    return true
+
+## Queue a drag event at the pointer, in the view's flipped points.
+func push_drag(state: State*, view: void*, sender: void*, kind: input.EventKind):
+    let position = msg_convert(view, sel("convertPoint:fromView:"), msg_point(sender, sel("draggingLocation")), none)
+    push_event(state, input.Event(kind = kind, x = position.x, y = position.y))
+
+## Copy the file paths on the drag's pasteboard into State, replacing the last drag's.
+func read_drop_paths(state: State*, sender: void*):
+    clear_drop_paths(state)
+    let pasteboard = msg_ptr(sender, sel("draggingPasteboard")) else return
+    let url_type = objc_getClass("NSURL") else return
+    let array_type = objc_getClass("NSArray") else return
+    let classes = msg_array_with(array_type, sel("arrayWithObject:"), url_type) else return
+    let urls = msg_read_objects(pasteboard, sel("readObjectsForClasses:options:"), classes, none) else return
+    let count = msg_uint(urls, sel("count"))
+    for index in 0..<count:
+        let url = msg_object_at(urls, sel("objectAtIndex:"), index) else continue
+        if not msg_bool(url, sel("isFileURL")):
+            continue
+        let path = msg_file_path(url, sel("fileSystemRepresentation")) else continue
+        add_drop_path(state, (str)(c.str)path)

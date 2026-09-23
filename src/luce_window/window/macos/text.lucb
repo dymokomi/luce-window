@@ -1,0 +1,118 @@
+#==============================================================================================
+#
+#   text - The macOS text-input client
+#
+#   DESCRIPTION:
+#       NSTextInputClient owns only the input method's marked string. Committed text crosses
+#       into the portable queue as scalars; document storage belongs to the UI. `NSNotFound`,
+#       the largest signed pointer-sized integer.
+#
+#==============================================================================================
+
+func mac_not_found() -> usize:
+    return ~(usize)0 >> 1
+
+func mac_register_text_input(native_type: void*) -> !:
+    let protocol = objc_getProtocol("NSTextInputClient") else error(failed, "AppKit text input is unavailable")
+    if not class_addProtocol(native_type, protocol):
+        error(failed, "could not register the native text input client")
+    try add_method(native_type, "insertText:replacementRange:", (void*)mac_insert_text, "v@:@{_NSRange=QQ}")
+    try add_method(native_type, "setMarkedText:selectedRange:replacementRange:", (void*)mac_set_marked, "v@:@{_NSRange=QQ}{_NSRange=QQ}")
+    try add_method(native_type, "unmarkText", (void*)mac_unmark, "v@:")
+    try add_method(native_type, "hasMarkedText", (void*)mac_has_marked, "B@:")
+    try add_method(native_type, "markedRange", (void*)mac_marked_range, "{_NSRange=QQ}@:")
+    try add_method(native_type, "selectedRange", (void*)mac_selected_range, "{_NSRange=QQ}@:")
+    try add_method(native_type, "validAttributesForMarkedText", (void*)mac_marked_attributes, "@@:")
+    try add_method(native_type, "attributedSubstringForProposedRange:actualRange:", (void*)mac_text_substring, "@@:{_NSRange=QQ}^{_NSRange=QQ}")
+    try add_method(native_type, "characterIndexForPoint:", (void*)mac_text_index, "Q@:{CGPoint=dd}")
+    try add_method(native_type, "firstRectForCharacterRange:actualRange:", (void*)mac_text_rect, "{CGRect={CGPoint=dd}{CGSize=dd}}@:{_NSRange=QQ}^{_NSRange=QQ}")
+    try add_method(native_type, "doCommandBySelector:", (void*)mac_text_command, "v@::")
+
+func mac_plain_text(value: void*) -> void*?:
+    let string_type = objc_getClass("NSString") else return none
+    if msg_bool_object(value, sel("isKindOfClass:"), string_type):
+        return value
+    return msg_ptr(value, sel("string"))
+
+func mac_clear_marked(state: State*):
+    if let text = state.marked_text:
+        msg_void(text, sel("release"))
+    state.marked_text = none
+    state.marked_selection = 0
+    state.marked_length = 0
+
+func mac_insert_text(object: void*, selector: void*, value: void*, replacement: LuceWindowMacRange):
+    let state = get_state(object) else return
+    mac_clear_marked(state)
+    if not state.text_input:
+        return
+    let text = mac_plain_text(value) else return
+    let count = (usize)msg_uint(text, sel("length"))
+    # Reject an oversized commit as a whole; never append only its trailing text.
+    if count > state.events.length - state.count:
+        state.overflowed = true
+        return
+    for index in 0..<count:
+        push_utf16(state, msg_character(text, sel("characterAtIndex:"), index))
+    if state.pending_surrogate != 0:
+        state.pending_surrogate = 0
+        push_scalar(state, 0xFFFD)
+
+func mac_set_marked(object: void*, selector: void*, value: void*, selection: LuceWindowMacRange, replacement: LuceWindowMacRange):
+    let state = get_state(object) else return
+    mac_clear_marked(state)
+    if not state.text_input:
+        return
+    let text = mac_plain_text(value) else return
+    if msg_uint(text, sel("length")) > 0:
+        state.marked_text = msg_ptr(text, sel("copy"))
+        state.marked_selection = selection.location
+        state.marked_length = selection.length
+
+func mac_unmark(object: void*, selector: void*):
+    if let state = get_state(object):
+        mac_clear_marked(state)
+
+func mac_has_marked(object: void*, selector: void*) -> bool:
+    let state = get_state(object) else return false
+    return state.marked_text != none
+
+func mac_marked_range(object: void*, selector: void*) -> LuceWindowMacRange:
+    let state = get_state(object) else return LuceWindowMacRange(mac_not_found(), 0)
+    let text = state.marked_text else return LuceWindowMacRange(mac_not_found(), 0)
+    return LuceWindowMacRange(0, (usize)msg_uint(text, sel("length")))
+
+func mac_selected_range(object: void*, selector: void*) -> LuceWindowMacRange:
+    let state = get_state(object) else return LuceWindowMacRange(0, 0)
+    return LuceWindowMacRange(state.marked_selection, state.marked_length)
+
+func mac_marked_attributes(object: void*, selector: void*) -> void*?:
+    let array_type = objc_getClass("NSArray") else return none
+    return msg_ptr(array_type, sel("array"))
+
+func mac_text_substring(object: void*, selector: void*, range: LuceWindowMacRange, actual: LuceWindowMacRange*?) -> void*?:
+    if let destination = actual:
+        *destination = LuceWindowMacRange(mac_not_found(), 0)
+    return none
+
+func mac_text_index(object: void*, selector: void*, point: LuceWindowMacPoint) -> usize:
+    return mac_not_found()
+
+func mac_text_rect(object: void*, selector: void*, range: LuceWindowMacRange, actual: LuceWindowMacRange*?) -> LuceWindowMacRect:
+    if let destination = actual:
+        *destination = range
+    let state = get_state(object) else return LuceWindowMacRect()
+    let native = state.native else return LuceWindowMacRect()
+    return msg_backing(native, sel("convertRectToScreen:"), LuceWindowMacRect(size = LuceWindowMacExtent(1.0, 18.0)))
+
+func mac_text_command(object: void*, selector: void*, command: void*):
+    # Navigation and editing commands are delivered through physical key events.
+    discard(command)
+
+## Called only under the facade's compile-time macOS branch. Keeping the runtime
+## enabled check inside that branch excludes Objective-C from other target links.
+func mac_cancel_text_input(state: State*):
+    mac_clear_marked(state)
+    if let view = state.view:
+        if let context = msg_ptr(view, sel("inputContext")):
+            msg_void(context, sel("discardMarkedText"))

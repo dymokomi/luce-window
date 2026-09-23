@@ -1,0 +1,32 @@
+import input
+import window
+import thread
+
+## This demonstration deliberately draws nothing: it exercises the native window
+## and event foundation before a graphics backend is attached. Escape requests
+## closure; the title-bar button follows the same application-owned close path.
+pub func main(arguments: str[]) -> i32!:
+    discard(arguments)
+    var surface = try window.Window.open(window.Options(title = "Luce — native window"))
+    defer surface.destroy()
+    try surface.show()
+    var running = true
+    while running:
+        while let event = try surface.poll():
+            match event.kind:
+                .close_requested:
+                    running = false
+                    break
+                .key_down:
+                    if event.key == input.Key.escape:
+                        try surface.request_close()
+                .resized:
+                    let size = try surface.size()
+                    print(f"content {size.width} × {size.height}, backing {size.pixel_width} × {size.pixel_height}, scale {size.scale}")
+                .overflow:
+                    print("input queue overflow; discard held input state")
+                _:
+                    discard(event)
+        if running:
+            thread.sleep(8)
+    return 0

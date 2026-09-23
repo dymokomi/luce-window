@@ -1,0 +1,81 @@
+## Hidden native windows exercise committed text without GPU hardware or focus.
+import input
+import thread
+import window
+
+extern func PostMessageW(window: void*, message: u32, word: usize, value: isize) -> i32
+extern func SendMessageW(window: void*, message: u32, word: usize, value: isize) -> isize
+extern func GetCursor() -> void*?
+extern func LoadCursorW(instance: void*?, resource: u16*) -> void*?
+
+pub func main(arguments: str[]) -> i32!:
+    var host = try window.Window.open(window.Options(title = "Luce text input contract"))
+    defer host.destroy()
+    var lease = try host.acquire_presentation()
+    defer lease.destroy()
+    let handle = try lease.windows_handle()
+    let cursors: usize[8] = [32512, 32513, 32649, 32644, 32645, 32646, 32646, 32648]
+    for index in 0..<cursors.length:
+        try host.set_cursor((input.Cursor)(u8)index)
+        assert((try host.cursor()) == (input.Cursor)(u8)index)
+        assert(SendMessageW(handle, 32, (usize)handle, 1) == 1)
+        assert(GetCursor() == LoadCursorW(none, (u16*)cursors[index]))
+    try host.set_cursor(input.Cursor.arrow)
+    while let event = try host.poll():
+        discard(event)
+    try host.set_text_input(true)
+    assert(PostMessageW(handle, 258, 233, 1) != 0)
+    assert(PostMessageW(handle, 258, 0xD83D, 1) != 0)
+    assert(PostMessageW(handle, 258, 0xDE00, 1) != 0)
+    assert(PostMessageW(handle, 265, 0x4E16, 1) != 0)
+    var expected: u32[3] = [233, 128512, 0x4E16]
+    var received: usize = 0
+    for tick in 0..<200:
+        while let event = try host.poll():
+            if event.kind == input.EventKind.text_input:
+                assert(received < expected.length and event.codepoint == expected[received])
+                received += 1
+        if received == expected.length:
+            break
+        thread.sleep(1)
+    assert(received == expected.length)
+    try host.set_text_input(false)
+    assert(PostMessageW(handle, 258, 97, 1) != 0)
+    for tick in 0..<8:
+        while let event = try host.poll():
+            assert(event.kind != input.EventKind.text_input)
+        thread.sleep(1)
+    # A rightward wheel request advances the viewport, hence negative content
+    # displacement. Fractional wheel steps retain precision on either axis.
+    assert(PostMessageW(handle, 526, (usize)120 << 16, 0) != 0)
+    assert(PostMessageW(handle, 526, (usize)65476 << 16, 0) != 0)
+    assert(PostMessageW(handle, 522, (usize)60 << 16, 0) != 0)
+    var wheel: usize = 0
+    for tick in 0..<200:
+        while let event = try host.poll():
+            if event.kind == input.EventKind.scroll:
+                assert(event.scroll_unit == input.ScrollUnit.lines)
+                if wheel == 0:
+                    assert(event.scroll_x == -1.0 and event.scroll_y == 0.0)
+                elif wheel == 1:
+                    assert(event.scroll_x == 0.5 and event.scroll_y == 0.0)
+                else:
+                    assert(wheel == 2 and event.scroll_x == 0.0 and event.scroll_y == 0.5)
+                wheel += 1
+        if wheel == 3:
+            break
+        thread.sleep(1)
+    assert(wheel == 3)
+    assert(PostMessageW(handle, 512, 0, 12 | (20 << 16)) != 0)
+    assert(PostMessageW(handle, 675, 0, 0) != 0)
+    var entered = false
+    var left = false
+    for tick in 0..<200:
+        while let event = try host.poll():
+            if event.kind == input.EventKind.pointer_entered: entered = true
+            if event.kind == input.EventKind.pointer_left: left = true
+        if entered and left: break
+        thread.sleep(1)
+    assert(entered and left)
+    print("ok Windows Unicode text input and wheel direction")
+    return 0

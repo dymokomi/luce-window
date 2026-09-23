@@ -1,0 +1,37 @@
+#==============================================================================================
+#
+#   cursor - The macOS cursor for the tracking area
+#
+#   DESCRIPTION:
+#       cursorUpdate: restores the current choice when AppKit enters our tracking area. No
+#       push/pop or hide/unhide stack is shared with another window.
+#
+#==============================================================================================
+
+func mac_cursor(cursor: input.Cursor) -> void*!:
+    var name: c.str = "arrowCursor"
+    match cursor:
+        .text: name = "IBeamCursor"
+        .pointer: name = "pointingHandCursor"
+        .resize_horizontal: name = "resizeLeftRightCursor"
+        .resize_vertical: name = "resizeUpDownCursor"
+        .grab: name = "openHandCursor"
+        .grabbing: name = "closedHandCursor"
+        .not_allowed: name = "operationNotAllowedCursor"
+        _: discard(())
+    return msg_ptr(try native_class("NSCursor"), sel(name)) else error(failed, "AppKit could not load a system cursor")
+
+func mac_set_cursor(state: State*, cursor: input.Cursor) -> !:
+    if state.native_cursor != none and state.cursor == cursor: return
+    let pool = objc_autoreleasePoolPush()
+    defer objc_autoreleasePoolPop(pool)
+    if state.native_cursor == none or state.cursor != cursor:
+        state.native_cursor = try mac_cursor(cursor)
+        state.cursor = cursor
+    if (state.pointer_inside or state.primary_down) and msg_bool(required(state.native), sel("isKeyWindow")):
+        msg_void(required(state.native_cursor), sel("set"))
+
+func cursor_callback(object: void*, selector: void*, event: void*):
+    let state = get_state(object) else return
+    let cursor = state.native_cursor else return
+    msg_void(cursor, sel("set"))

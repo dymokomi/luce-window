@@ -1,0 +1,63 @@
+name: Windows x64
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      CC: gcc
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: luce-window
+      - name: Read compiler and dependency pins
+        id: pins
+        shell: pwsh
+        run: |
+          "base=$(Get-Content luce-window/bootstrap/BASE)" >> $env:GITHUB_OUTPUT
+          "std=$(Get-Content luce-window/bootstrap/STD)" >> $env:GITHUB_OUTPUT
+      - uses: actions/checkout@v7
+        with:
+          repository: dymokomi/luce-base
+          ref: ${{ steps.pins.outputs.base }}
+          path: luce-base
+      - uses: actions/checkout@v7
+        with:
+          repository: dymokomi/luce-std
+          ref: ${{ steps.pins.outputs.std }}
+          path: luce-std
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-python
+      - name: Configure native library search
+        shell: msys2 {0}
+        run: echo "LIBRARY_PATH=$(cygpath -m /ucrt64/lib)" >> "$GITHUB_ENV"
+      - name: Build the compiler
+        working-directory: luce-base
+        shell: msys2 {0}
+        run: python tools/build_windows.py
+      - name: Module tests through both backends
+        working-directory: luce-window
+        shell: msys2 {0}
+        run: python tests/run.py --base ../luce-base/build/luce-base.exe --skip-programs
+      - name: Windows contracts
+        working-directory: luce-window
+        shell: msys2 {0}
+        run: |
+          python tools/test_windows_native.py --compiler ../luce-base/build/luce-base.exe
+          python tools/test_window_targets.py --compiler ../luce-base/build/luce-base.exe
+      - name: Retain diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: luce-window-windows-${{ github.sha }}
+          path: |
+            luce-window/build/*.json
+            luce-window/build/*.log
+          if-no-files-found: ignore

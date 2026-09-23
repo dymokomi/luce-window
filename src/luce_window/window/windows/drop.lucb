@@ -1,0 +1,168 @@
+#==============================================================================================
+#
+#   drop - Files dragged onto the window from other applications
+#
+#   DESCRIPTION:
+#       An OLE IDropTarget, laid out as COM expects: a pointer to a table of seven entry points
+#       followed by the object's own fields. OLE calls it synchronously on the UI thread while
+#       the modal drag loop pumps messages; each call queues a portable drag event at the
+#       pointer and answers with the effect the application last chose. The dragged paths come
+#       from CF_HDROP and are copied into State until the next drag enters.
+#
+#==============================================================================================
+
+# mark: COM layout =============================================================================
+
+extern func OleInitialize(reserved: void*?) -> i32
+extern func RegisterDragDrop(window: void*, target: void*) -> i32
+extern func RevokeDragDrop(window: void*) -> i32
+extern func ReleaseStgMedium(medium: WinStorageMedium*)
+extern func DragQueryFileW(drop: void*, index: u32, file: u16*?, count: u32) -> u32
+
+## IDropTarget's entry points, in COM's order.
+struct WinDropTable:
+    var slots: void*[7]
+
+## The object OLE holds: its table first, as every COM object starts.
+struct WinDropTarget:
+    var table: WinDropTable*
+    var references: u32
+    var state: State*
+
+## FORMATETC and STGMEDIUM, field for field.
+struct WinFormat:
+    var format: u16
+    var device: usize
+    var aspect: u32
+    var index: i32
+    var medium: u32
+
+struct WinStorageMedium:
+    var kind: u32
+    var handle: usize
+    var release: usize
+
+type WinGetData = func(void*, WinFormat*, WinStorageMedium*) -> i32
+
+var win_drop_table: WinDropTable = ---
+var win_drop_table_ready: bool
+
+## Make `state`'s window an OLE drop target for files.
+func win_register_drops(state: State*) -> !:
+    discard(OleInitialize(none))
+    if not win_drop_table_ready:
+        win_drop_table.slots = [(void*)win_drop_query, (void*)win_drop_add_ref, (void*)win_drop_release, (void*)win_drag_enter,
+                                (void*)win_drag_over, (void*)win_drag_leave, (void*)win_drag_drop]
+        win_drop_table_ready = true
+    let target = try new WinDropTarget(table = &win_drop_table, references = 1, state = state) in memory.heap
+    if RegisterDragDrop(required(state.native), (void*)target) < 0:
+        free(target) in memory.heap
+        error(failed, "the window could not accept dropped files")
+    state.drop_target = (void*)target
+
+## Stop accepting drops and free the target; OLE has released its references by then.
+func win_revoke_drops(state: State*):
+    let target = state.drop_target else return
+    if let native = state.native:
+        discard(RevokeDragDrop(native))
+    free((WinDropTarget*)target) in memory.heap
+    state.drop_target = none
+
+# mark: IUnknown ===============================================================================
+
+## IUnknown {00000000-0000-0000-C000-000000000046} and IDropTarget {00000122-…-000000000046}
+## differ only in their first four bytes.
+func win_drop_query(this: WinDropTarget*, requested: const u8*, result: void**) -> i32:
+    let tail: u8[12] = [0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46]
+    var matches = true
+    for index in 0..<(usize)12:
+        if requested[4 + index] != tail[index]:
+            matches = false
+    let first = (u32)requested[0] | (u32)requested[1] << 8 | (u32)requested[2] << 16 | (u32)requested[3] << 24
+    if matches and (first == 0 or first == 0x122):
+        *result = (void*)this
+        this.references += 1
+        return 0
+    *result = (void*)(usize)0
+    return -2147467262
+
+func win_drop_add_ref(this: WinDropTarget*) -> u32:
+    this.references += 1
+    return this.references
+
+## The target lives as long as its window; State frees it after revoking it.
+func win_drop_release(this: WinDropTarget*) -> u32:
+    if this.references > 1:
+        this.references -= 1
+    return this.references
+
+# mark: IDropTarget ============================================================================
+
+func win_drag_enter(this: WinDropTarget*, data: void*, keys: u32, point: u64, effect: u32*) -> i32:
+    discard(keys)
+    let state = this.state
+    win_read_drop_paths(state, data)
+    state.drop_accepted = state.drop_count > 0
+    win_push_drag(state, point, input.EventKind.drag_entered)
+    *effect = 1 if state.drop_accepted and state.drop_count > 0 else 0
+    return 0
+
+func win_drag_over(this: WinDropTarget*, keys: u32, point: u64, effect: u32*) -> i32:
+    discard(keys)
+    let state = this.state
+    win_push_drag(state, point, input.EventKind.drag_moved)
+    *effect = 1 if state.drop_accepted and state.drop_count > 0 else 0
+    return 0
+
+func win_drag_leave(this: WinDropTarget*) -> i32:
+    push_event(this.state, input.Event(kind = input.EventKind.drag_left))
+    return 0
+
+func win_drag_drop(this: WinDropTarget*, data: void*, keys: u32, point: u64, effect: u32*) -> i32:
+    discard(data)
+    discard(keys)
+    let state = this.state
+    if state.drop_accepted and state.drop_count > 0:
+        win_push_drag(state, point, input.EventKind.drop)
+        *effect = 1
+    else:
+        push_event(state, input.Event(kind = input.EventKind.drag_left))
+        *effect = 0
+    return 0
+
+## Queue a drag event; OLE gives the point in screen pixels as a POINTL by value.
+func win_push_drag(state: State*, point: u64, kind: input.EventKind):
+    let native = state.native else return
+    var client = WinPoint(x = (i32)(u32)(point & 0xFFFFFFFF), y = (i32)(u32)(point >> 32))
+    discard(ScreenToClient(native, &client))
+    let dpi = GetDpiForWindow(native)
+    let scale = (f64)dpi / 96.0 if dpi > 0 else 1.0
+    push_event(state, input.Event(kind = kind, x = (f64)client.x / scale, y = (f64)client.y / scale))
+
+## Copy the drag's files (CF_HDROP) into State, replacing the last drag's.
+func win_read_drop_paths(state: State*, data: void*):
+    clear_drop_paths(state)
+    var wanted = WinFormat(format = 15, device = 0, aspect = 1, index = -1, medium = 1)
+    var medium = WinStorageMedium(kind = 0, handle = 0, release = 0)
+    # IDataObject::GetData is the fourth entry of the object's table.
+    let table = *(usize*)data
+    let get_data = (WinGetData)(void*)*(usize*)(table + 3 * 8)
+    if get_data(data, &wanted, &medium) < 0 or medium.handle == 0:
+        return
+    defer ReleaseStgMedium(&medium)
+    let drop = (void*)medium.handle
+    let count = DragQueryFileW(drop, 0xFFFFFFFF, none, 0)
+    for index in 0..<count:
+        let length = DragQueryFileW(drop, index, none, 0)
+        if length == 0:
+            continue
+        let wide = alloc u16[(usize)length + 1] in memory.heap catch failure:
+            discard(failure)
+            continue
+        defer free(wide) in memory.heap
+        discard(DragQueryFileW(drop, index, wide.data, length + 1))
+        let path = windows_text.narrow(wide[..<length], failed) catch failure:
+            discard(failure)
+            continue
+        add_drop_path(state, path)
+        free(u8[]((u8*)path.bytes.data, path.length + 1))

@@ -1,0 +1,12 @@
+#prisma 4.0
+def package "native_window" {
+    def native "inputs" {
+        str[] frameworks = ["CoreGraphics"]
+    }
+
+    def dependency "luce-window" {
+        str owner = "dymokomi"
+        str version = "^0.1.0"
+        str path = "../../.."
+    }
+}

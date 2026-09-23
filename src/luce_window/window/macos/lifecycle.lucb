@@ -1,0 +1,268 @@
+#==============================================================================================
+#
+#   lifecycle - The macOS window and its runtime classes
+#
+#   DESCRIPTION:
+#       Runtime classes are initialized once, on the main thread, and never unloaded. The view
+#       owns no Base allocation; both it and the delegate borrow State until teardown detaches
+#       their pointers. NSWindow retains its content view, not its delegate, so State explicitly
+#       owns an additional reference to each object.
+#
+#==============================================================================================
+
+# mark: Runtime classes and the window state ==================================================
+
+var view_class: void*?
+var delegate_class: void*?
+var application: void*?
+# The NSApp pointer as bits, published once at open so wake() can read it from any thread.
+var app_handle: @usize
+
+func make_class(parent: c.str, name: c.str) -> void*!:
+    let native_type = objc_allocateClassPair(try native_class(parent), name, 0) else error(failed, "could not allocate a native window class")
+    errdefer objc_disposeClassPair(native_type)
+    if not class_addIvar(native_type, "luceState", 8, 3, "^v"):
+        error(failed, "could not register native window state")
+    return native_type
+
+func setup_classes() -> !:
+    if delegate_class == none:
+        let native_type = try make_class("NSObject", "LuceBaseWindowDelegateV1")
+        errdefer objc_disposeClassPair(native_type)
+        try add_method(native_type, "windowShouldClose:", (void*)close_callback, "B@:@")
+        try add_method(native_type, "windowDidResize:", (void*)resize_callback, "v@:@")
+        try add_method(native_type, "windowDidChangeBackingProperties:", (void*)resize_callback, "v@:@")
+        try add_method(native_type, "windowDidBecomeKey:", (void*)focus_callback, "v@:@")
+        try add_method(native_type, "windowDidResignKey:", (void*)focus_callback, "v@:@")
+        try add_method(native_type, "luceDidFinishLaunching:", (void*)launch_callback, "v@:@")
+        objc_registerClassPair(native_type)
+        delegate_class = native_type
+    if view_class == none:
+        let native_type = try make_class("NSView", "LuceBaseWindowViewV1")
+        errdefer objc_disposeClassPair(native_type)
+        try add_method(native_type, "acceptsFirstResponder", (void*)view_accepts, "B@:")
+        try add_method(native_type, "isFlipped", (void*)view_accepts, "B@:")
+        try add_method(native_type, "cursorUpdate:", (void*)cursor_callback, "v@:@")
+        try mac_register_text_input(native_type)
+        try mac_register_drop_methods(native_type)
+        var keys: c.str[3] = ["keyDown:", "keyUp:", "flagsChanged:"]
+        for name in keys:
+            try add_method(native_type, name, (void*)key_callback, "v@:@")
+        var pointer: c.str[14] = ["mouseDown:", "mouseUp:", "rightMouseDown:", "rightMouseUp:", "otherMouseDown:", "otherMouseUp:", "mouseMoved:", "mouseDragged:", "rightMouseDragged:", "otherMouseDragged:", "scrollWheel:", "mouseEntered:", "mouseExited:", "magnifyWithEvent:"]
+        for name in pointer:
+            try add_method(native_type, name, (void*)pointer_callback, "v@:@")
+        objc_registerClassPair(native_type)
+        view_class = native_type
+
+func mac_open(options: Options) -> State*!:
+    let pool = objc_autoreleasePoolPush()
+    defer objc_autoreleasePoolPop(pool)
+    try setup_classes()
+    if application == none:
+        let app = msg_ptr(try native_class("NSApplication"), sel("sharedApplication")) else error(failed, "AppKit could not initialize an application")
+        try finish_launch(app)
+        # A program launched from an application bundle is already a regular application,
+        # and AppKit answers NO to a change that changes nothing. Only a policy that is
+        # still not regular afterwards is a failure.
+        if not msg_policy(app, sel("setActivationPolicy:"), 0) and msg_uint(app, sel("activationPolicy")) != 0:
+            error(failed, "AppKit refused the application's window activation policy")
+        application = app
+        app_handle.store((usize)app, .release)
+    let state = try new State() in memory.heap
+    errdefer mac_destroy(state)
+    state.native_cursor = try mac_cursor(input.Cursor.arrow)
+    let rect = LuceWindowMacRect(size = LuceWindowMacExtent(width = (f64)options.width, height = (f64)options.height))
+    let allocated = msg_ptr(try native_class("NSWindow"), sel("alloc")) else error(failed, "could not allocate a native window")
+    # An Objective-C init owns its alloc reference even when it returns nil.
+    let native = msg_init_window(allocated, sel("initWithContentRect:styleMask:backing:defer:"), rect, 15 if options.resizable else 7, 2, false) else error(failed, "could not initialize a native window")
+    state.native = native
+    msg_bool_arg(native, sel("setReleasedWhenClosed:"), false)
+    let view_allocated = msg_ptr(required(view_class), sel("alloc")) else error(failed, "could not allocate a native view")
+    let view = msg_init_view(view_allocated, sel("initWithFrame:"), rect) else error(failed, "could not initialize a native view")
+    state.view = view
+    set_state(view, state)
+    msg_object(native, sel("setContentView:"), view)
+    try mac_accept_file_drops(view)
+    # The view retains its tracking area. InVisibleRect lets AppKit update its
+    # bounds on resize; enter/leave remain paired while a captured drag moves out.
+    let tracking_allocated = msg_ptr(try native_class("NSTrackingArea"), sel("alloc")) else error(failed, "could not allocate pointer tracking")
+    let tracking = msg_init_tracking(tracking_allocated, sel("initWithRect:options:owner:userInfo:"), rect, 0x01 | 0x04 | 0x20 | 0x200 | 0x400, view, none) else error(failed, "could not initialize pointer tracking")
+    msg_object(view, sel("addTrackingArea:"), tracking)
+    msg_void(tracking, sel("release"))
+    let delegate = msg_ptr(required(delegate_class), sel("new")) else error(failed, "could not allocate a window delegate")
+    state.delegate = delegate
+    set_state(delegate, state)
+    msg_object(native, sel("setDelegate:"), delegate)
+    msg_bool_arg(native, sel("setAcceptsMouseMovedEvents:"), true)
+    # Deliver every mouse-moved event rather than the OS-coalesced summary, so hover
+    # feedback tracks a fast pointer instead of stepping between coarse samples.
+    msg_bool_arg(try native_class("NSEvent"), sel("setMouseCoalescingEnabled:"), false)
+    discard(msg_bool_object(native, sel("makeFirstResponder:"), view))
+    let text_allocated = msg_ptr(try native_class("NSString"), sel("alloc")) else error(failed, "could not allocate a title")
+    let title = msg_init_text(text_allocated, sel("initWithBytes:length:encoding:"), options.title.bytes.data, options.title.length, 4) else error(failed, "could not initialize the title")
+    defer msg_void(title, sel("release"))
+    msg_object(native, sel("setTitle:"), title)
+    msg_void(native, sel("center"))
+    return state
+
+## Complete AppKit's launch through its run loop before using our polling loop.
+## Merely calling finishLaunching can leave an unbundled process unable to become
+## active. A temporary notification observer stops this first run, without
+## replacing an application's delegate. Already launched applications skip it.
+func finish_launch(app: void*) -> !:
+    let running = required(msg_ptr(try native_class("NSRunningApplication"), sel("currentApplication")))
+    if msg_bool(running, sel("isFinishedLaunching")):
+        return
+    let observer = msg_ptr(required(delegate_class), sel("new")) else error(failed, "could not allocate a launch observer")
+    defer msg_void(observer, sel("release"))
+    let center = required(msg_ptr(try native_class("NSNotificationCenter"), sel("defaultCenter")))
+    msg_observe(center, sel("addObserver:selector:name:object:"), observer, sel("luceDidFinishLaunching:"), NSApplicationDidFinishLaunchingNotification, app)
+    defer msg_object(center, sel("removeObserver:"), observer)
+    msg_void(app, sel("run"))
+
+func launch_callback(object: void*, selector: void*, notification: void*):
+    discard(object)
+    discard(selector)
+    let app = required(msg_ptr(notification, sel("object")))
+    let event_class = objc_getClass("NSEvent") else trap("AppKit has no NSEvent class")
+    let event = required(msg_wakeup(event_class, sel("otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:"), 15, LuceWindowMacPoint(), 0, 0.0, 0, none, 0, 0, 0))
+    msg_post(app, sel("postEvent:atStart:"), event, true)
+    msg_object(app, sel("stop:"), none)
+
+func mac_show(state: State*):
+    let pool = objc_autoreleasePoolPush()
+    defer objc_autoreleasePoolPop(pool)
+    msg_bool_arg(required(application), sel("activateIgnoringOtherApps:"), true)
+    msg_object(required(state.native), sel("makeKeyAndOrderFront:"), none)
+
+func mac_size(state: State*) -> Size:
+    let pool = objc_autoreleasePoolPush()
+    defer objc_autoreleasePoolPop(pool)
+    let view = required(state.view)
+    let bounds = msg_rect(view, sel("bounds"))
+    let backing = msg_backing(view, sel("convertRectToBacking:"), bounds)
+    return Size(width = bounds.size.width, height = bounds.size.height, pixel_width = backing.size.width, pixel_height = backing.size.height, scale = msg_double(required(state.native), sel("backingScaleFactor")))
+
+func mac_resize(state: State*, width: u32, height: u32):
+    let pool = objc_autoreleasePoolPush()
+    defer objc_autoreleasePoolPop(pool)
+    msg_extent(required(state.native), sel("setContentSize:"), LuceWindowMacExtent(width = (f64)width, height = (f64)height))
+
+## Borderless coverage of the main screen, hiding the dock and menu bar. The
+## windowed frame, style and level are restored when leaving. Synchronous: the
+## content extent changes before this returns, and a resize event is queued.
+func mac_set_fullscreen(state: State*, enabled: bool) -> !:
+    if state.fullscreen == enabled:
+        return
+    let pool = objc_autoreleasePoolPush()
+    defer objc_autoreleasePoolPop(pool)
+    let native = required(state.native)
+    let app = required(application)
+    if enabled:
+        let screen = msg_ptr(try native_class("NSScreen"), sel("mainScreen")) else error(failed, "no display is available for fullscreen")
+        let frame = msg_rect(native, sel("frame"))
+        state.saved_x = frame.origin.x
+        state.saved_y = frame.origin.y
+        state.saved_width = frame.size.width
+        state.saved_height = frame.size.height
+        state.saved_style = msg_uint(native, sel("styleMask"))
+        state.saved_level = msg_i64(native, sel("level"))
+        msg_u64_arg(native, sel("setStyleMask:"), 0)
+        msg_set_frame(native, sel("setFrame:display:"), msg_rect(screen, sel("frame")), true)
+        msg_i64_arg(native, sel("setLevel:"), 25)
+        msg_u64_arg(app, sel("setPresentationOptions:"), 6)
+        state.fullscreen = true
+    else:
+        msg_u64_arg(app, sel("setPresentationOptions:"), 0)
+        msg_i64_arg(native, sel("setLevel:"), state.saved_level)
+        msg_u64_arg(native, sel("setStyleMask:"), state.saved_style)
+        msg_set_frame(native, sel("setFrame:display:"), LuceWindowMacRect(
+            origin = LuceWindowMacPoint(x = state.saved_x, y = state.saved_y),
+            size = LuceWindowMacExtent(width = state.saved_width, height = state.saved_height)), true)
+        state.fullscreen = false
+    push_event(state, input.Event(kind = input.EventKind.resized))
+
+func mac_pump(waiting: State*):
+    let app = application else return
+    let pool = objc_autoreleasePoolPush()
+    defer objc_autoreleasePoolPop(pool)
+    let date_class = objc_getClass("NSDate") else trap("AppKit has no NSDate class")
+    let past = required(msg_ptr(date_class, sel("distantPast")))
+    var count: usize = 0
+    while count < 256:
+        let event = msg_next(app, sel("nextEventMatchingMask:untilDate:inMode:dequeue:"), ~(u64)0, past, NSDefaultRunLoopMode, true) else break
+        msg_object(app, sel("sendEvent:"), event)
+        count += 1
+        # Return after delivery so the UI can update text focus before the next key.
+        if waiting.count > 0 or waiting.close_requested or waiting.overflowed:
+            break
+    msg_void(app, sel("updateWindows"))
+
+## Block up to `timeout_ns` for the first event (a wake() posts one), deliver it, then
+## drain the rest like mac_pump. A timeout with no event leaves the queue empty.
+func mac_wait(waiting: State*, timeout_ns: u64):
+    let app = application else return
+    let pool = objc_autoreleasePoolPush()
+    defer objc_autoreleasePoolPop(pool)
+    let date_class = objc_getClass("NSDate") else trap("AppKit has no NSDate class")
+    let seconds = (f64)timeout_ns / 1000000000.0
+    let deadline = required(msg_interval(date_class, sel("dateWithTimeIntervalSinceNow:"), seconds))
+    if let event = msg_next(app, sel("nextEventMatchingMask:untilDate:inMode:dequeue:"), ~(u64)0, deadline, NSDefaultRunLoopMode, true):
+        msg_object(app, sel("sendEvent:"), event)
+        let past = required(msg_ptr(date_class, sel("distantPast")))
+        var count: usize = 0
+        while count < 256:
+            if waiting.count > 0 or waiting.close_requested or waiting.overflowed:
+                break
+            let more = msg_next(app, sel("nextEventMatchingMask:untilDate:inMode:dequeue:"), ~(u64)0, past, NSDefaultRunLoopMode, true) else break
+            msg_object(app, sel("sendEvent:"), more)
+            count += 1
+    msg_void(app, sel("updateWindows"))
+
+## Post an application-defined event so a blocked wait() returns. Reads only the
+## atomically-published NSApp handle and makes one thread-safe AppKit call; it takes no
+## lock and runs no callback, so any thread may call it. A no-op before a window opens.
+func mac_wake() -> !:
+    let bits = app_handle.load(.acquire)
+    if bits == 0:
+        return
+    let app = (void*)bits
+    let pool = objc_autoreleasePoolPush()
+    defer objc_autoreleasePoolPop(pool)
+    let event_class = objc_getClass("NSEvent") else error(failed, "AppKit has no NSEvent class")
+    let event = msg_wakeup(event_class, sel("otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:"), 15, LuceWindowMacPoint(), 0, 0.0, 0, none, 0, 0, 0) else error(failed, "could not create a wake event")
+    msg_post(app, sel("postEvent:atStart:"), event, true)
+
+func mac_destroy(state: State*):
+    let pool = objc_autoreleasePoolPush()
+    defer objc_autoreleasePoolPop(pool)
+    state.destroyed = true
+    if state.fullscreen:
+        if let app = application:
+            msg_u64_arg(app, sel("setPresentationOptions:"), 0)
+        state.fullscreen = false
+    mac_clear_marked(state)
+    if let view = state.view:
+        set_state(view, none)
+    if let delegate = state.delegate:
+        set_state(delegate, none)
+    if let native = state.native:
+        msg_object(native, sel("setDelegate:"), none)
+        msg_object(native, sel("orderOut:"), none)
+        msg_void(native, sel("close"))
+    # A graphics backend may still own resources referring to the native host.
+    # Close immediately, but keep the host alive until its lease is returned.
+    if not state.presentation_held:
+        mac_free(state)
+
+func mac_free(state: State*):
+    let pool = objc_autoreleasePoolPush()
+    defer objc_autoreleasePoolPop(pool)
+    if let native = state.native:
+        msg_void(native, sel("release"))
+    if let view = state.view:
+        msg_void(view, sel("release"))
+    if let delegate = state.delegate:
+        msg_void(delegate, sel("release"))
+    clear_drop_paths(state)
+    free(state) in memory.heap

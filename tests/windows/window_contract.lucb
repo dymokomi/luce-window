@@ -1,0 +1,68 @@
+import window
+import input
+import thread
+
+extern func PostMessageW(window: void*, message: u32, word: usize, value: isize) -> i32
+
+pub func main(arguments: str[]) -> i32!:
+    var first = try window.Window.open(window.Options(title = "Luce Windows — 日本語 😀", width = 400, height = 300))
+    defer first.destroy()
+    var second = try window.Window.open(window.Options(title = "Luce second window", width = 320, height = 240))
+    defer second.destroy()
+    var lease = try first.acquire_presentation()
+    defer lease.destroy()
+    assert(not try lease.visible())
+    try first.show()
+    assert(try lease.visible())
+    try first.resize(480, 320)
+    let extent = try first.size()
+    assert(extent.width == 480.0 and extent.height == 320.0)
+    while let event = try first.poll(): discard(event)
+    let handle = try lease.windows_handle()
+    assert(PostMessageW(handle, 256, 65, 30 << 16) != 0)
+    assert(PostMessageW(handle, 257, 65, (30 << 16) | 2147483648) != 0)
+    assert(PostMessageW(handle, 512, 0, 20 | (30 << 16)) != 0)
+    var key_down = false
+    var key_up = false
+    var pointer = false
+    for tick in 0..<60:
+        while let event = try first.poll():
+            if event.kind == input.EventKind.key_down and event.key == input.Key.a: key_down = true
+            if event.kind == input.EventKind.key_up and event.key == input.Key.a: key_up = true
+            if event.kind == input.EventKind.pointer_moved: pointer = true
+        thread.sleep(10)
+    assert(key_down and key_up and pointer)
+    try first.set_text_input(true)
+    assert(PostMessageW(handle, 258, 233, 1) != 0)
+    assert(PostMessageW(handle, 258, 0xD83D, 1) != 0)
+    assert(PostMessageW(handle, 258, 0xDE00, 1) != 0)
+    assert(PostMessageW(handle, 265, 0x4E16, 1) != 0)
+    var committed: u32[3]
+    var received: usize = 0
+    for tick in 0..<60:
+        while let event = try first.poll():
+            if event.kind == input.EventKind.text_input:
+                assert(received < committed.length)
+                committed[received] = event.codepoint
+                received += 1
+        if received == 3:
+            break
+        thread.sleep(10)
+    assert(received == 3 and committed[0] == 233 and committed[1] == 128512 and committed[2] == 0x4E16)
+    try first.set_text_input(false)
+    assert(PostMessageW(handle, 16, 0, 0) != 0)
+    var close_received = false
+    while let event = try first.poll():
+        if event.kind == input.EventKind.close_requested: close_received = true
+    assert(close_received)
+    while let event = try second.poll():
+        assert(event.kind != input.EventKind.close_requested)
+    first.destroy()
+    let visibility = lease.visible() catch failure:
+        assert(failure.code == window.closed)
+        recover false
+    assert(not visibility)
+    lease.destroy()
+    first.destroy()
+    print("ok Windows windows, DPI, Unicode, input, isolation and presentation lifetime")
+    return 0

@@ -1,0 +1,125 @@
+## Test-only AppKit calls manufacture native events and find windows by title.
+## The production library exports no event injection hooks.
+import c
+
+extern struct ProbePoint:
+    x: f64
+    y: f64
+
+extern struct ProbeRange:
+    location: usize
+    length: usize
+
+extern func init_text as "objc_msgSend"(object: void*, selector: void*, bytes: const u8*, length: usize, encoding: u64) -> void*
+extern func insert_text as "objc_msgSend"(object: void*, selector: void*, value: void*, range: ProbeRange)
+extern func mark_text as "objc_msgSend"(object: void*, selector: void*, value: void*, selection: ProbeRange, replacement: ProbeRange)
+extern func bool_result as "objc_msgSend"(object: void*, selector: void*) -> bool
+
+func native_text(value: str) -> void*:
+    let allocated = msg(objc_getClass("NSString"), sel_registerName("alloc"))
+    return init_text(allocated, sel_registerName("initWithBytes:length:encoding:"), value.bytes.data, value.length, 4)
+
+pub func commit_text(window: void*, value: str):
+    let string = native_text(value)
+    defer invoke(string, sel_registerName("release"))
+    let view = msg(window, sel_registerName("contentView"))
+    insert_text(view, sel_registerName("insertText:replacementRange:"), string, ProbeRange(0x7FFFFFFFFFFFFFFF, 0))
+
+pub func composition(window: void*, value: str):
+    let string = native_text(value)
+    defer invoke(string, sel_registerName("release"))
+    let view = msg(window, sel_registerName("contentView"))
+    mark_text(view, sel_registerName("setMarkedText:selectedRange:replacementRange:"), string, ProbeRange(0, 0), ProbeRange(0x7FFFFFFFFFFFFFFF, 0))
+
+pub func composing(window: void*) -> bool:
+    return bool_result(msg(window, sel_registerName("contentView")), sel_registerName("hasMarkedText"))
+
+pub func typed_key(window: void*, value: str):
+    let string = native_text(value)
+    defer invoke(string, sel_registerName("release"))
+    let event = key_event(objc_getClass("NSEvent"), sel_registerName("keyEventWithType:location:modifierFlags:timestamp:windowNumber:context:characters:charactersIgnoringModifiers:isARepeat:keyCode:"), 10, ProbePoint(), 0, 0.0, (i64)uint(window, sel_registerName("windowNumber")), none, string, string, false, 0)
+    call(msg(window, sel_registerName("contentView")), sel_registerName("keyDown:"), event)
+
+extern func objc_getClass(name: c.str) -> void*
+extern func sel_registerName(name: c.str) -> void*
+extern func objc_autoreleasePoolPush() -> void*
+extern func objc_autoreleasePoolPop(pool: void*)
+extern func msg as "objc_msgSend"(object: void*, selector: void*) -> void*
+extern func uint as "objc_msgSend"(object: void*, selector: void*) -> u64
+extern func indexed as "objc_msgSend"(object: void*, selector: void*, index: u64) -> void*
+extern func text as "objc_msgSend"(object: void*, selector: void*) -> c.str
+extern func call as "objc_msgSend"(object: void*, selector: void*, argument: void*?)
+extern func invoke as "objc_msgSend"(object: void*, selector: void*)
+extern func notify as "objc_msgSend"(object: void*, selector: void*, name: void*, sender: void*)
+extern var NSWindowDidBecomeKeyNotification: void*
+extern var NSWindowDidResignKeyNotification: void*
+extern func CGEventCreateScrollWheelEvent(source: void*?, units: u32, wheels: u32, vertical: i32, ...) -> void*
+extern func CFRelease(object: void*)
+extern func from_cg as "objc_msgSend"(object: void*, selector: void*, event: void*) -> void*
+extern func key_event as "objc_msgSend"(object: void*, selector: void*, kind: u64, point: ProbePoint, flags: u64, time: f64, number: i64, context: void*?, characters: void*, plain: void*, repeated: bool, code: u16) -> void*
+extern func mouse_event as "objc_msgSend"(object: void*, selector: void*, kind: u64, point: ProbePoint, flags: u64, time: f64, number: i64, context: void*?, sequence: i64, clicks: i64, pressure: f32) -> void*
+
+pub func pool() -> void*:
+    return objc_autoreleasePoolPush()
+
+pub func drain(token: void*):
+    objc_autoreleasePoolPop(token)
+
+pub func find(title: str) -> void*:
+    let app = msg(objc_getClass("NSApplication"), sel_registerName("sharedApplication"))
+    let windows = msg(app, sel_registerName("windows"))
+    var i: u64 = 0
+    while i < uint(windows, sel_registerName("count")):
+        let native = indexed(windows, sel_registerName("objectAtIndex:"), i)
+        let name = msg(native, sel_registerName("title"))
+        if (str)text(name, sel_registerName("UTF8String")) == title:
+            return native
+        i += 1
+    trap("test window was not registered with AppKit")
+
+pub func close(window: void*):
+    call(window, sel_registerName("performClose:"), none)
+
+## Focus acquisition is controlled by the desktop, including its foreground app.
+## Exercise the actual notification-to-delegate path without stealing user focus.
+pub func focus_notification(window: void*, gained: bool):
+    let center = msg(objc_getClass("NSNotificationCenter"), sel_registerName("defaultCenter"))
+    notify(center, sel_registerName("postNotificationName:object:"), NSWindowDidBecomeKeyNotification if gained else NSWindowDidResignKeyNotification, window)
+
+pub func key(window: void*, kind: u64, code: u16, repeated: bool = false, direct: bool = false):
+    let characters = msg(objc_getClass("NSString"), sel_registerName("new"))
+    let event = key_event(objc_getClass("NSEvent"), sel_registerName("keyEventWithType:location:modifierFlags:timestamp:windowNumber:context:characters:charactersIgnoringModifiers:isARepeat:keyCode:"), kind, ProbePoint(), 1 << 17, 0.0, (i64)uint(window, sel_registerName("windowNumber")), none, characters, characters, repeated, code)
+    if direct:
+        let view = msg(window, sel_registerName("contentView"))
+        call(view, sel_registerName("flagsChanged:" if kind == 12 else ("keyDown:" if kind == 10 else "keyUp:")), event)
+    else:
+        call(window, sel_registerName("sendEvent:"), event)
+    invoke(characters, sel_registerName("release"))
+
+pub func mouse(window: void*, kind: u64, x: f64, y: f64):
+    let event = mouse_event(objc_getClass("NSEvent"), sel_registerName("mouseEventWithType:location:modifierFlags:timestamp:windowNumber:context:eventNumber:clickCount:pressure:"), kind, ProbePoint(x = x, y = y), 0, 0.0, (i64)uint(window, sel_registerName("windowNumber")), none, 1, 1, 0.0)
+    let view = msg(window, sel_registerName("contentView"))
+    call(view, sel_registerName("mouseDown:" if kind == 1 else "mouseUp:"), event)
+
+extern func tracking_event as "objc_msgSend"(object: void*, selector: void*, kind: u64, point: ProbePoint, flags: u64, time: f64, number: i64, context: void*?, sequence: i64, tracking: i64, user_data: void*?) -> void*
+
+pub func pointer_boundary(window: void*, entered: bool):
+    let view = msg(window, sel_registerName("contentView"))
+    let areas = msg(view, sel_registerName("trackingAreas"))
+    assert(uint(areas, sel_registerName("count")) == 1)
+    let event = tracking_event(objc_getClass("NSEvent"), sel_registerName("enterExitEventWithType:location:modifierFlags:timestamp:windowNumber:context:eventNumber:trackingNumber:userData:"), 8 if entered else 9, ProbePoint(12.0, 20.0), 0, 0.0, (i64)uint(window, sel_registerName("windowNumber")), none, 1, 0, none)
+    call(view, sel_registerName("mouseEntered:" if entered else "mouseExited:"), event)
+
+pub func cursor_update(window: void*):
+    call(msg(window, sel_registerName("contentView")), sel_registerName("cursorUpdate:"), none)
+
+pub func cursor_is(name: c.str) -> bool:
+    let kind = objc_getClass("NSCursor")
+    return msg(kind, sel_registerName("currentCursor")) == msg(kind, sel_registerName(name))
+
+pub func scroll(window: void*, points: bool):
+    let cg = CGEventCreateScrollWheelEvent(none, 0 if points else 1, 2, i32(3), i32(-2))
+    defer CFRelease(cg)
+    let event = from_cg(objc_getClass("NSEvent"), sel_registerName("eventWithCGEvent:"), cg)
+    let view = msg(window, sel_registerName("contentView"))
+    call(view, sel_registerName("scrollWheel:"), event)
