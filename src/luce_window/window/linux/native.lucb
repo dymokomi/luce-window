@@ -13,6 +13,8 @@
 # structure (map, unmap, configure) and focus.
 let x11_event_mask: i64 = 1 | 2 | 4 | 8 | 16 | 32 | 64 | (1 << 15) | (1 << 17) | (1 << 21)
 
+extern func getpid() -> i32
+
 # mark: The window ============================================================================
 
 func x11_open(options: Options) -> State*!:
@@ -42,6 +44,13 @@ func x11_open(options: Options) -> State*!:
     if not options.resizable:
         var hints = XSizeHints(flags = 16 | 32, min_width = (i32)width, min_height = (i32)height, max_width = (i32)width, max_height = (i32)height)
         x.api.set_wm_normal_hints(x.display, window, &hints)
+    else:
+        # PMinSize: a resizable window still keeps a usable size (320 by 240 points).
+        var hints = XSizeHints(flags = 16, min_width = (i32)math_round(320.0 * x.scale), min_height = (i32)math_round(240.0 * x.scale))
+        x.api.set_wm_normal_hints(x.display, window, &hints)
+    # _NET_WM_PID (CARDINAL, 32-bit items): the desktop can tell whose window it is.
+    var pid: u64 = (u64)getpid()
+    discard(x.api.change_property(x.display, window, x.api.intern_atom(x.display, "_NET_WM_PID", 0), 6, 32, 0, (const u8*)(void*)&pid, 1))
     if let im = x.im:
         # XIMPreeditNothing | XIMStatusNothing: composed text arrives committed.
         state.x_ic = x.api.create_ic(im, "inputStyle", 0x0008 | 0x0400, "clientWindow", window, none)
