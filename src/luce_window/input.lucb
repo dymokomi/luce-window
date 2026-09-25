@@ -21,6 +21,10 @@ pub enum Cursor as u8:
     grab = 5
     grabbing = 6
     not_allowed = 7
+    ## Thin cross hairs, for picking a pixel.
+    crosshair = 8
+    ## None shown: the application draws its own (a brush's outline, a tool's glyph).
+    hidden = 9
 
 ## The kind of a window input event; which `Event` fields matter.
 pub enum EventKind as u8:

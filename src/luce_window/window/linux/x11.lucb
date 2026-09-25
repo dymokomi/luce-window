@@ -185,6 +185,9 @@ struct X11Api:
     var create_font_cursor: func(void*, u32) -> u64
     var define_cursor: func(void*, u64, u64) -> i32
     var free_cursor: func(void*, u64) -> i32
+    var create_bitmap_from_data: func(void*, u64, const u8*, u32, u32) -> u64
+    var create_pixmap_cursor: func(void*, u64, u64, void*, void*, u32, u32) -> u64
+    var free_pixmap: func(void*, u64) -> i32
     var open_im: func(void*, void*?, void*?, void*?) -> void*?
     var create_ic: func(void*, c.str, i64, c.str, u64, void*?) -> void*?
     var destroy_ic: func(void*) -> unit
@@ -252,6 +255,9 @@ func x11_load(library: void*) -> X11Api!:
         create_font_cursor = (func(void*, u32) -> u64)(try x11_symbol(library, "XCreateFontCursor")),
         define_cursor = (func(void*, u64, u64) -> i32)(try x11_symbol(library, "XDefineCursor")),
         free_cursor = (func(void*, u64) -> i32)(try x11_symbol(library, "XFreeCursor")),
+        create_bitmap_from_data = (func(void*, u64, const u8*, u32, u32) -> u64)(try x11_symbol(library, "XCreateBitmapFromData")),
+        create_pixmap_cursor = (func(void*, u64, u64, void*, void*, u32, u32) -> u64)(try x11_symbol(library, "XCreatePixmapCursor")),
+        free_pixmap = (func(void*, u64) -> i32)(try x11_symbol(library, "XFreePixmap")),
         open_im = (func(void*, void*?, void*?, void*?) -> void*?)(try x11_symbol(library, "XOpenIM")),
         create_ic = (func(void*, c.str, i64, c.str, u64, void*?) -> void*?)(try x11_symbol(library, "XCreateIC")),
         destroy_ic = (func(void*) -> unit)(try x11_symbol(library, "XDestroyIC")),

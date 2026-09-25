@@ -13,7 +13,10 @@ extern func GetCursorPos(point: WinPoint*) -> i32
 extern func GetCapture() -> void*?
 extern func WindowFromPoint(point: WinPoint) -> void*?
 
-func win_cursor(cursor: input.Cursor) -> void*!:
+## The system cursor for `cursor`; none for `hidden`, which SetCursor shows as nothing.
+func win_cursor(cursor: input.Cursor) -> void*?!:
+    if cursor == input.Cursor.hidden:
+        return none
     var resource: usize = 32512
     match cursor:
         .text: resource = 32513
@@ -23,11 +26,12 @@ func win_cursor(cursor: input.Cursor) -> void*!:
         .grab: resource = 32646
         .grabbing: resource = 32646
         .not_allowed: resource = 32648
+        .crosshair: resource = 32515
         _: discard(())
     return LoadCursorW(none, (u16*)resource) else error(failed, "Windows could not load a system cursor")
 
 func win_set_cursor(state: State*, cursor: input.Cursor) -> !:
-    if state.native_cursor != none and state.cursor == cursor: return
+    if (state.native_cursor != none or cursor == input.Cursor.hidden) and state.cursor == cursor: return
     if state.native_cursor == none or state.cursor != cursor:
         state.native_cursor = try win_cursor(cursor)
         state.cursor = cursor

@@ -158,7 +158,7 @@ pub struct Window:
     ## windows keep their own cursors. The choice survives OS cursor updates.
     pub func set_cursor(cursor: input.Cursor) -> !:
         let state = try self.checked()
-        if (u8)cursor > (u8)input.Cursor.not_allowed:
+        if (u8)cursor > (u8)input.Cursor.hidden:
             error(invalid_options, "unknown system cursor")
         if platform.macos and platform.arm64:
             try mac_set_cursor(state, cursor)

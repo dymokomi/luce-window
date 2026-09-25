@@ -1,7 +1,7 @@
 #prisma 4.0
 def package "luce-window" {
     str owner = "dymokomi"
-    str version = "0.1.5"
+    str version = "0.1.6"
     str kind = "package"
     str language = "luce-base"
     str description = "Native desktop windows for Luce on macOS, Windows and Linux (X11): open, size, full screen, cursors, text input, keyboard, pointer and touchpad events, and files dragged in from other applications."

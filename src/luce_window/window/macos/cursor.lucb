@@ -8,7 +8,20 @@
 #
 #==============================================================================================
 
+extern func msg_init_size as "objc_msgSend"(object: void*, selector: void*, width: f64, height: f64) -> void*?
+extern func msg_init_cursor as "objc_msgSend"(object: void*, selector: void*, image: void*, x: f64, y: f64) -> void*?
+
+## A cursor with nothing to show, made once and kept for the process.
+var mac_hidden: void*? = none
+
 func mac_cursor(cursor: input.Cursor) -> void*!:
+    if cursor == input.Cursor.hidden:
+        if let made = mac_hidden:
+            return made
+        let blank = msg_init_size(required(msg_ptr(try native_class("NSImage"), sel("alloc"))), sel("initWithSize:"), 1.0, 1.0) else error(failed, "AppKit could not make an empty image")
+        let made = msg_init_cursor(required(msg_ptr(try native_class("NSCursor"), sel("alloc"))), sel("initWithImage:hotSpot:"), blank, 0.0, 0.0) else error(failed, "AppKit could not make an empty cursor")
+        mac_hidden = made
+        return made
     var name: c.str = "arrowCursor"
     match cursor:
         .text: name = "IBeamCursor"
@@ -18,6 +31,7 @@ func mac_cursor(cursor: input.Cursor) -> void*!:
         .grab: name = "openHandCursor"
         .grabbing: name = "closedHandCursor"
         .not_allowed: name = "operationNotAllowedCursor"
+        .crosshair: name = "crosshairCursor"
         _: discard(())
     return msg_ptr(try native_class("NSCursor"), sel(name)) else error(failed, "AppKit could not load a system cursor")
 
