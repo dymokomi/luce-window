@@ -196,8 +196,13 @@ func push_merged_moves(state: State*, native: void*, client: WinPoint, held: boo
         return
     var current = WinMovePoint(x = screen.x & 65535, y = screen.y & 65535, time = state.move_time, extra = 0)
     var merged: WinMovePoint[64]
-    # GMMP_USE_DISPLAY_POINTS; a position not in the history (-1) gives none.
-    let found = GetMouseMovePointsEx((u32)sizeof(WinMovePoint), &current, &merged[0], 64, 1)
+    # GMMP_USE_DISPLAY_POINTS. The message time is when the merged move was read,
+    # often a timer tick (~15.6 ms) after the history's time for that point, so
+    # the exact lookup can miss (-1); a zero time matches the newest entry there.
+    var found = GetMouseMovePointsEx((u32)sizeof(WinMovePoint), &current, &merged[0], 64, 1)
+    if found < 1:
+        var any_time = WinMovePoint(x = screen.x & 65535, y = screen.y & 65535, time = 0, extra = 0)
+        found = GetMouseMovePointsEx((u32)sizeof(WinMovePoint), &any_time, &merged[0], 64, 1)
     if found < 1:
         return
     # The history's own time for this point: a merged move is stamped when it
