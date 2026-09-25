@@ -15,6 +15,7 @@ with tempfile.TemporaryDirectory(prefix='luce-window-targets-') as directory:
     (work / 'package.prisma').write_text('#prisma 4.0\ndef package "window-targets-probe" {\n    str owner = "dymokomi"\n    str version = "0.0.0"\n    str kind = "tool"\n    str language = "luce-base"\n    str entry = "probe.lucb"\n    def dependency "luce-window" {\n        str owner = "dymokomi"\n        str version = "^0.1.0"\n        str path = "' + str(ROOT) + '"\n    }\n}\n')
     source.write_text('''import window
 import input
+import platform
 pub func main(arguments: str[]) -> i32!:
     var host = try window.Window.open(window.Options(title = "Input target contract"))
     defer host.destroy()
@@ -25,9 +26,14 @@ pub func main(arguments: str[]) -> i32!:
     assert((try host.cursor()) == input.Cursor.resize_horizontal)
     discard(try host.wait(1000000))
     try window.wake()
+    var lease = try host.acquire_presentation()
+    defer lease.destroy()
+    if platform.linux:
+        discard(try lease.x11_display())
+        discard(try lease.x11_window())
     return 0
 ''')
-    for target in ['arm64-macos', 'x86_64-windows', 'x86_64-linux']:
+    for target in ['arm64-macos', 'x86_64-windows', 'x86_64-linux', 'arm64-linux']:
         for level in [0, 3]:
             output = work / 'probe.s'
             subprocess.run([str(a.compiler.resolve()), 'build', str(source), '--target', target,
@@ -47,4 +53,11 @@ pub func main(arguments: str[]) -> i32!:
             if target.endswith('windows'):
                 for symbol in ['MsgWaitForMultipleObjectsEx', 'PostThreadMessageW']:
                     assert symbol in assembly, (target, level, symbol)
+            # Linux loads Xlib at run time and blocks in poll() on the display and a wake pipe
+            if target.endswith('linux'):
+                for symbol in ['libX11.so.6', 'XOpenDisplay', 'XCreateSimpleWindow', 'Xutf8LookupString', 'dlopen', 'pipe2', 'poll']:
+                    assert symbol in assembly, (target, level, symbol)
+            else:
+                for symbol in ['libX11.so.6', 'XOpenDisplay']:
+                    assert symbol not in assembly, (target, level, symbol)
             print('PASS text input, cursor, wait and wake target', target, level, flush=True)

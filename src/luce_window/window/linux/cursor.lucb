@@ -1,0 +1,35 @@
+#==============================================================================================
+#
+#   cursor - The X11 content cursor
+#
+#   DESCRIPTION:
+#       Cursors from the core cursor font, defined on the window so the server shows them
+#       whenever the pointer is over its content. The window owns its current cursor.
+#
+#==============================================================================================
+
+## The cursor-font glyph for a portable cursor (X11/cursorfont.h).
+func x11_cursor_shape(cursor: input.Cursor) -> u32:
+    match cursor:
+        .text: return 152
+        .pointer: return 60
+        .resize_horizontal: return 108
+        .resize_vertical: return 116
+        .grab: return 58
+        .grabbing: return 52
+        .not_allowed: return 0
+        _: return 68
+
+func x11_set_cursor(state: State*, cursor: input.Cursor) -> !:
+    if state.x_cursor != 0 and state.cursor == cursor:
+        return
+    let x = try x11_connect()
+    let created = x.api.create_font_cursor(x.display, x11_cursor_shape(cursor))
+    if created == 0:
+        error(failed, "X11 could not create a system cursor")
+    discard(x.api.define_cursor(x.display, state.x_window, created))
+    if state.x_cursor != 0:
+        discard(x.api.free_cursor(x.display, state.x_cursor))
+    state.x_cursor = created
+    state.cursor = cursor
+    discard(x.api.flush(x.display))

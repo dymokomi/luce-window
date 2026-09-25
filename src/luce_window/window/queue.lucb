@@ -53,6 +53,16 @@ struct State:
     var drop_accepted: bool
     ## Windows: the OLE drop target registered for this window.
     var drop_target: void*?
+    ## Linux (X11): the window's XID, its size in pixels, whether it is mapped,
+    ## its input context, its current cursor, and which physical keys are down
+    ## (by X keycode), so an auto-repeat press is known as one.
+    var x_window: u64
+    var x_width: u32
+    var x_height: u32
+    var x_mapped: bool
+    var x_ic: void*?
+    var x_cursor: u64
+    var x_keys: u64[4]
 
 ## Committed characters own their value. Control keys remain physical events;
 ## no queued event borrows native string storage or a composition buffer.

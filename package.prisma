@@ -4,7 +4,7 @@ def package "luce-window" {
     str version = "0.1.3"
     str kind = "package"
     str language = "luce-base"
-    str description = "Native desktop windows for Luce on macOS and Windows: open, size, full screen, cursors, text input, keyboard, pointer and touchpad events, and files dragged in from other applications."
+    str description = "Native desktop windows for Luce on macOS, Windows and Linux (X11): open, size, full screen, cursors, text input, keyboard, pointer and touchpad events, and files dragged in from other applications."
     str readme = "README.md"
 
     def export "input" {

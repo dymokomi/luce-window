@@ -1,0 +1,194 @@
+#==============================================================================================
+#
+#   events - X11 event translation
+#
+#   DESCRIPTION:
+#       Turns Xlib events into portable events on their window's queue: keys by physical
+#       position (evdev codes), committed text from the input method, pointer and wheel in
+#       logical points, crossing, focus, mapping and size.
+#
+#==============================================================================================
+
+## One X event, delivered to the window it names.
+func x11_dispatch(x: X11Connection, event: XEventBuffer*):
+    let any = (XAnyEvent*)(void*)event
+    let state = x11_state_for(any.window) else return
+    if state.destroyed:
+        return
+    let kind = any.kind
+    if kind == x_key_press or kind == x_key_release:
+        x11_key_event(x, state, event)
+    elif kind == x_button_press or kind == x_button_release:
+        x11_button_event(x, state, (XKeyEvent*)(void*)event)
+    elif kind == x_motion_notify:
+        let motion = (XKeyEvent*)(void*)event
+        push_event(state, input.Event(kind = input.EventKind.pointer_moved, modifiers = x11_modifiers(motion.state),
+                                      x = (f64)motion.x / x.scale, y = (f64)motion.y / x.scale))
+    elif kind == x_enter_notify or kind == x_leave_notify:
+        let crossing = (XCrossingEvent*)(void*)event
+        # Crossings a grab causes (a button held past the edge) are not the pointer leaving.
+        if crossing.mode != 0:
+            return
+        if kind == x_enter_notify:
+            push_event(state, input.Event(kind = input.EventKind.pointer_entered, modifiers = x11_modifiers(crossing.state),
+                                          x = (f64)crossing.x / x.scale, y = (f64)crossing.y / x.scale))
+        else:
+            push_event(state, input.Event(kind = input.EventKind.pointer_left))
+    elif kind == x_focus_in or kind == x_focus_out:
+        let focus = (XFocusEvent*)(void*)event
+        if focus.mode != 0:
+            return
+        if let ic = state.x_ic:
+            if kind == x_focus_in:
+                x.api.set_ic_focus(ic)
+            else:
+                x.api.unset_ic_focus(ic)
+        if kind == x_focus_out:
+            state.x_keys = [0, 0, 0, 0]
+        push_event(state, input.Event(kind = input.EventKind.focus_gained if kind == x_focus_in else input.EventKind.focus_lost))
+    elif kind == x_map_notify:
+        state.x_mapped = true
+    elif kind == x_unmap_notify:
+        state.x_mapped = false
+    elif kind == x_configure_notify:
+        let configure = (XConfigureEvent*)(void*)event
+        let width = (u32)configure.width
+        let height = (u32)configure.height
+        if width != state.x_width or height != state.x_height:
+            state.x_width = width
+            state.x_height = height
+            push_event(state, input.Event(kind = input.EventKind.resized))
+    elif kind == x_client_message:
+        let message = (XClientEvent*)(void*)event
+        if message.message_type == x.wm_protocols and (u64)message.data[0] == x.wm_delete:
+            state.close_requested = true
+
+## A key pressed or let go: its physical key, whether it repeats, then the text
+## it types when the window takes text.
+func x11_key_event(x: X11Connection, state: State*, event: XEventBuffer*):
+    let key_event = (XKeyEvent*)(void*)event
+    let down = key_event.kind == x_key_press
+    let code = key_event.keycode & 255
+    let word = (usize)(code >> 6)
+    let bit = 1u64 << (u64)(code & 63)
+    if not down and not x.detectable_repeat and x.api.events_queued(x.display, 1) > 0:
+        # Without detectable auto-repeat a held key sends release and press at one
+        # time: the release is dropped and the press below is known as a repeat.
+        var next: XEventBuffer
+        discard(x.api.peek_event(x.display, (void*)&next))
+        let following = (XKeyEvent*)(void*)&next
+        if following.kind == x_key_press and following.keycode == key_event.keycode and following.time == key_event.time:
+            return
+    let repeated = down and (state.x_keys[word] & bit) != 0
+    if down:
+        state.x_keys[word] |= bit
+    else:
+        state.x_keys[word] &= ~bit
+    let key = x11_key(code)
+    let held = x11_key_modifiers(key_event.state, key, down)
+    push_event(state, input.Event(kind = input.EventKind.key_down if down else input.EventKind.key_up, key = key, modifiers = held, repeated = repeated))
+    if (u16)key >= 224 or key == input.Key.caps_lock:
+        push_event(state, input.Event(kind = input.EventKind.modifiers_changed, modifiers = held))
+    if down and state.text_input:
+        x11_text(x, state, event)
+
+## The committed text a key press types: UTF-8 from the input method, or
+## Latin-1 from the keymap when none runs. Control characters are dropped.
+func x11_text(x: X11Connection, state: State*, event: XEventBuffer*):
+    var buffer: u8[64]
+    if let ic = state.x_ic:
+        var status: i32 = 0
+        let count = x.api.utf8_lookup_string(ic, (void*)event, &buffer[0], 63, none, &status)
+        # XLookupChars or XLookupBoth: there is text.
+        if (status != 2 and status != 4) or count <= 0:
+            return
+        let text = buffer[..<(usize)count]
+        var offset: usize = 0
+        while offset < text.length:
+            let decoded = utf8.decode(text, offset) else return
+            push_scalar(state, (u32)decoded.scalar)
+            offset += decoded.width
+        return
+    let count = x.api.lookup_string((void*)event, &buffer[0], 63, none, none)
+    for index in 0..<(usize)(count if count > 0 else 0):
+        push_scalar(state, (u32)buffer[index])
+
+## Buttons 1-3 are left, middle and right; 4-7 the wheel; 8 and 9 back and forward.
+func x11_button_event(x: X11Connection, state: State*, event: XKeyEvent*):
+    let button = event.keycode
+    let down = event.kind == x_button_press
+    let px = (f64)event.x / x.scale
+    let py = (f64)event.y / x.scale
+    let held = x11_modifiers(event.state)
+    if button >= 4 and button <= 7:
+        if not down:
+            return
+        # Wheel up is content up (positive y) and a right tilt content left
+        # (negative x), as the other backends report them.
+        push_event(state, input.Event(kind = input.EventKind.scroll, modifiers = held, x = px, y = py,
+                                      scroll_x = (1.0 if button == 6 else (-1.0 if button == 7 else 0.0)),
+                                      scroll_y = (1.0 if button == 4 else (-1.0 if button == 5 else 0.0)), scroll_unit = input.ScrollUnit.lines))
+        return
+    var portable: u32 = 0
+    if button == 2:
+        portable = 2
+    elif button == 3:
+        portable = 1
+    elif button >= 8:
+        portable = button - 5
+    push_event(state, input.Event(kind = input.EventKind.pointer_down if down else input.EventKind.pointer_up, modifiers = held,
+                                  button = portable, x = px, y = py))
+
+## The modifier keys from an event's state bits: Shift, Lock, Control, Mod1 (Alt), Mod4 (Super).
+func x11_modifiers(bits: u32) -> input.Modifiers:
+    return input.Modifiers(shift = (bits & 1) != 0, control = (bits & 4) != 0, alt = (bits & 8) != 0, super = (bits & 64) != 0,
+                           caps_lock = (bits & 2) != 0)
+
+## An event's state is from before it; a modifier key's own change is folded in.
+func x11_key_modifiers(bits: u32, key: input.Key, down: bool) -> input.Modifiers:
+    var held = x11_modifiers(bits)
+    if key == input.Key.left_shift or key == input.Key.right_shift:
+        held.shift = down
+    elif key == input.Key.left_control or key == input.Key.right_control:
+        held.control = down
+    elif key == input.Key.left_alt or key == input.Key.right_alt:
+        held.alt = down
+    elif key == input.Key.left_super or key == input.Key.right_super:
+        held.super = down
+    elif key == input.Key.caps_lock and down:
+        held.caps_lock = not held.caps_lock
+    return held
+
+# The main block's evdev codes are the PC scan codes: the same table as Windows.
+let x11_scan_keys: u16[64] = [0, 41, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 45, 46, 42, 43,
+                              20, 26, 8, 21, 23, 28, 24, 12, 18, 19, 47, 48, 40, 224, 4, 22,
+                              7, 9, 10, 11, 13, 14, 15, 51, 52, 53, 225, 49, 29, 27, 6, 25,
+                              5, 17, 16, 54, 55, 56, 229, 0, 226, 44, 57, 58, 59, 60, 61, 62]
+
+## The physical key of X keycode `code`: its evdev code is eight less.
+func x11_key(code: u32) -> input.Key:
+    if code < 8:
+        return input.Key.unknown
+    let scan = (usize)(code - 8)
+    if scan < x11_scan_keys.length:
+        return (input.Key)x11_scan_keys[scan]
+    if scan >= 64 and scan <= 68:
+        return (input.Key)(u16)(scan - 64 + 63)
+    match scan:
+        87: return input.Key.f11
+        88: return input.Key.f12
+        96: return input.Key.enter
+        97: return input.Key.right_control
+        100: return input.Key.right_alt
+        102: return input.Key.home
+        103: return input.Key.up
+        104: return input.Key.page_up
+        105: return input.Key.left
+        106: return input.Key.right
+        107: return input.Key.end
+        108: return input.Key.down
+        109: return input.Key.page_down
+        111: return input.Key.delete
+        125: return input.Key.left_super
+        126: return input.Key.right_super
+        _: return input.Key.unknown

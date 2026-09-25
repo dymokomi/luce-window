@@ -30,11 +30,13 @@ pub let closed: ErrorCode = ErrorCode.package(89)
 ## The window's presentation host is still leased.
 pub let presentation_in_use: ErrorCode = ErrorCode.package(90)
 
-## Native windows support arm64 macOS and x86_64 Windows. The compiler selects
-## system link dependencies. Importing input alone has no window-system dependency. Other targets return
-## unsupported before entering platform code. Linux support is a later increment.
+## Native windows support arm64 macOS, x86_64 Windows and Linux (X11, also
+## under Wayland through XWayland; libX11 is loaded at run time, so nothing is
+## linked). The compiler selects system link dependencies. Importing input
+## alone has no window-system dependency. Other targets return unsupported
+## before entering platform code.
 pub func supported() -> bool:
-    return (platform.macos and platform.arm64) or (platform.windows and platform.x86_64)
+    return (platform.macos and platform.arm64) or (platform.windows and platform.x86_64) or (platform.linux and (platform.x86_64 or platform.arm64))
 
 ## Options for creating a window; each has a sensible default.
 pub struct Options:
@@ -84,6 +86,8 @@ pub struct Window:
             opened = Window(state = try mac_open(options))
         elif platform.windows:
             opened = Window(state = try win_open(options))
+        elif platform.linux:
+            opened = Window(state = try x11_open(options))
         else:
             error(unsupported, "native windows are not implemented for this target")
         errdefer opened.destroy()
@@ -98,6 +102,8 @@ pub struct Window:
             mac_show(state)
         if platform.windows:
             discard(ShowWindow(required(state.native), 5))
+        if platform.linux:
+            x11_show(state)
 
     ## The window's current content extent.
     pub func size() -> Size!:
@@ -106,6 +112,8 @@ pub struct Window:
             return mac_size(state)
         if platform.windows:
             return win_size(state)
+        if platform.linux:
+            return x11_size(state)
         error(unsupported, "native windows are not implemented for this target")
 
     ## Resize the content to `width` by `height` logical points.
@@ -116,6 +124,8 @@ pub struct Window:
             mac_resize(state, width, height)
         if platform.windows:
             try win_resize(state, width, height)
+        if platform.linux:
+            try x11_resize(state, width, height)
 
     ## Cover the main display without chrome, or restore the previous windowed
     ## frame. Idempotent. Emits a resize event when the extent changes.
@@ -125,6 +135,8 @@ pub struct Window:
             try mac_set_fullscreen(state, enabled)
         if platform.windows:
             try win_set_fullscreen(state, enabled)
+        if platform.linux:
+            try x11_set_fullscreen(state, enabled)
 
     ## Whether this window currently covers the display without chrome.
     pub func is_fullscreen() -> bool!:
@@ -152,6 +164,8 @@ pub struct Window:
             try mac_set_cursor(state, cursor)
         if platform.windows:
             try win_set_cursor(state, cursor)
+        if platform.linux:
+            try x11_set_cursor(state, cursor)
 
     ## The files of the drag in progress, or of the last drop, as UTF-8 paths:
     ## read on `drag_entered` through `drop`; replaced when the next drag enters.
@@ -209,6 +223,8 @@ pub struct Window:
             mac_pump(state)
         if platform.windows:
             win_pump(state)
+        if platform.linux:
+            x11_pump(state)
         return pop_event(state)
 
     ## Block until an event is queued or `timeout_ns` elapses, then behave like poll():
@@ -223,6 +239,8 @@ pub struct Window:
             mac_wait(state, timeout_ns)
         if platform.windows:
             win_wait(state, timeout_ns)
+        if platform.linux:
+            x11_wait(state, timeout_ns)
         return pop_event(state)
 
     ## Idempotent on this value. Detach callbacks before releasing native objects
@@ -237,6 +255,8 @@ pub struct Window:
             mac_destroy(state)
         if platform.windows:
             win_destroy(state)
+        if platform.linux:
+            x11_destroy(state)
 
     func checked() -> State*!:
         try check_thread()
@@ -253,6 +273,8 @@ pub func wake() -> !:
         try mac_wake()
     if platform.windows:
         try win_wake()
+    if platform.linux:
+        try x11_wake()
 
 func check_thread() -> !:
     if not supported():
@@ -260,7 +282,7 @@ func check_thread() -> !:
     if platform.macos and platform.arm64:
         if pthread_main_np() == 0:
             error(wrong_thread, "window operations require the main thread")
-    if platform.windows and not thread.is_main():
+    if (platform.windows or platform.linux) and not thread.is_main():
         error(wrong_thread, "window operations require the main thread")
 
 func check_extent(width: u32, height: u32) -> !:

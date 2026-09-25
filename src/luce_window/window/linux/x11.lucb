@@ -1,0 +1,320 @@
+#==============================================================================================
+#
+#   x11 - Xlib, loaded at run time, and the process's one connection
+#
+#   DESCRIPTION:
+#       libX11.so.6 is opened on the first window, so a build needs no development package,
+#       and it runs under Wayland desktops through XWayland. The connection, its atoms, the
+#       display scale, the input method and the wake pipe are shared by every window.
+#
+#==============================================================================================
+
+# mark: C library ==============================================================================
+
+extern func dlopen(file: c.str, mode: i32) -> void*?
+extern func dlsym(handle: void*, name: c.str) -> void*?
+extern func pipe2(fds: i32*, flags: i32) -> i32
+extern func readlink(path: c.str, buffer: u8*, size: usize) -> isize
+
+## struct pollfd.
+extern struct PollFd:
+    fd: i32
+    events: i16
+    revents: i16
+
+extern func poll(fds: PollFd*, count: u64, timeout: i32) -> i32
+
+# The C library's read and write, under names of their own in this module.
+extern func read(fd: i32, buffer: void*, count: usize) -> isize
+extern func write(fd: i32, buffer: const void*, count: usize) -> isize
+
+# mark: Xlib events ============================================================================
+
+## XEvent: a 192-byte union, read through the views below by its type.
+extern struct XEventBuffer:
+    words: i64[24]
+
+## The fields every event begins with (XAnyEvent).
+extern struct XAnyEvent:
+    kind: i32
+    serial: u64
+    send_event: i32
+    display: void*?
+    window: u64
+
+## XKeyEvent; XButtonEvent and XMotionEvent share its layout (their button or
+## hint in `keycode`), and XCrossingEvent its position fields.
+extern struct XKeyEvent:
+    kind: i32
+    serial: u64
+    send_event: i32
+    display: void*?
+    window: u64
+    root: u64
+    subwindow: u64
+    time: u64
+    x: i32
+    y: i32
+    x_root: i32
+    y_root: i32
+    state: u32
+    keycode: u32
+    same_screen: i32
+
+## XCrossingEvent: pointer_entered and pointer_left; `mode` 0 is a plain crossing.
+extern struct XCrossingEvent:
+    kind: i32
+    serial: u64
+    send_event: i32
+    display: void*?
+    window: u64
+    root: u64
+    subwindow: u64
+    time: u64
+    x: i32
+    y: i32
+    x_root: i32
+    y_root: i32
+    mode: i32
+    detail: i32
+    same_screen: i32
+    focus: i32
+    state: u32
+
+## XFocusChangeEvent; `mode` 0 is a plain change, not one a grab caused.
+extern struct XFocusEvent:
+    kind: i32
+    serial: u64
+    send_event: i32
+    display: void*?
+    window: u64
+    mode: i32
+    detail: i32
+
+extern struct XConfigureEvent:
+    kind: i32
+    serial: u64
+    send_event: i32
+    display: void*?
+    event: u64
+    window: u64
+    x: i32
+    y: i32
+    width: i32
+    height: i32
+    border_width: i32
+    above: u64
+    override_redirect: i32
+
+## XClientMessageEvent with 32-bit (long) data.
+extern struct XClientEvent:
+    kind: i32
+    serial: u64
+    send_event: i32
+    display: void*?
+    window: u64
+    message_type: u64
+    format: i32
+    data: i64[5]
+
+## XSizeHints, for a window that cannot be resized.
+extern struct XSizeHints:
+    flags: i64
+    x: i32
+    y: i32
+    width: i32
+    height: i32
+    min_width: i32
+    min_height: i32
+    max_width: i32
+    max_height: i32
+    width_inc: i32
+    height_inc: i32
+    min_aspect_x: i32
+    min_aspect_y: i32
+    max_aspect_x: i32
+    max_aspect_y: i32
+    base_width: i32
+    base_height: i32
+    win_gravity: i32
+
+let x_key_press: i32 = 2
+let x_key_release: i32 = 3
+let x_button_press: i32 = 4
+let x_button_release: i32 = 5
+let x_motion_notify: i32 = 6
+let x_enter_notify: i32 = 7
+let x_leave_notify: i32 = 8
+let x_focus_in: i32 = 9
+let x_focus_out: i32 = 10
+let x_unmap_notify: i32 = 18
+let x_map_notify: i32 = 19
+let x_configure_notify: i32 = 22
+let x_client_message: i32 = 33
+
+# mark: Xlib functions =========================================================================
+
+## The Xlib functions the backend calls. XCreateIC is variadic; it is called
+## through a fixed signature ending in its null terminator, which the x86-64
+## and arm64 Linux calling conventions pass alike.
+struct X11Api:
+    var open_display: func(c.str?) -> void*?
+    var default_screen: func(void*) -> i32
+    var root_window: func(void*, i32) -> u64
+    var connection_number: func(void*) -> i32
+    var create_simple_window: func(void*, u64, i32, i32, u32, u32, u32, u64, u64) -> u64
+    var destroy_window: func(void*, u64) -> i32
+    var map_window: func(void*, u64) -> i32
+    var unmap_window: func(void*, u64) -> i32
+    var resize_window: func(void*, u64, u32, u32) -> i32
+    var select_input: func(void*, u64, i64) -> i32
+    var intern_atom: func(void*, c.str, i32) -> u64
+    var set_wm_protocols: func(void*, u64, u64*, i32) -> i32
+    var store_name: func(void*, u64, c.str) -> i32
+    var change_property: func(void*, u64, u64, u64, i32, i32, const u8*, i32) -> i32
+    var delete_property: func(void*, u64, u64) -> i32
+    var set_wm_normal_hints: func(void*, u64, XSizeHints*) -> unit
+    var send_event: func(void*, u64, i32, i64, void*) -> i32
+    var flush: func(void*) -> i32
+    var pending: func(void*) -> i32
+    var events_queued: func(void*, i32) -> i32
+    var next_event: func(void*, void*) -> i32
+    var peek_event: func(void*, void*) -> i32
+    var filter_event: func(void*, u64) -> i32
+    var get_default: func(void*, c.str, c.str) -> u8*?
+    var create_font_cursor: func(void*, u32) -> u64
+    var define_cursor: func(void*, u64, u64) -> i32
+    var free_cursor: func(void*, u64) -> i32
+    var open_im: func(void*, void*?, void*?, void*?) -> void*?
+    var create_ic: func(void*, c.str, i64, c.str, u64, void*?) -> void*?
+    var destroy_ic: func(void*) -> unit
+    var set_ic_focus: func(void*) -> unit
+    var unset_ic_focus: func(void*) -> unit
+    var utf8_lookup_string: func(void*, void*, u8*, i32, u64*?, i32*?) -> i32
+    var lookup_string: func(void*, u8*, i32, u64*?, void*?) -> i32
+    var detectable_auto_repeat: func(void*, i32, i32*?) -> i32
+
+## The process's one connection and what every window shares.
+struct X11Connection:
+    var api: X11Api
+    var display: void*
+    var root: u64
+    ## Backing pixels per logical point: Xft.dpi / 96.
+    var scale: f64
+    var wm_protocols: u64
+    var wm_delete: u64
+    var wm_class: u64
+    var net_wm_name: u64
+    var utf8_string: u64
+    var net_wm_state: u64
+    var net_wm_fullscreen: u64
+    ## The input method, when one is running; each window then has a context.
+    var im: void*?
+    ## Whether the server reports held keys as presses without releases.
+    var detectable_repeat: bool
+    var wake_read: i32
+
+var x11_connection: X11Connection? = none
+# The wake pipe's write end plus one (0: none), published for wake() on any thread.
+var x11_wake_fd: @u32
+# The open windows, found by XID when their events arrive.
+var x11_windows: State*?[16]
+
+func x11_symbol(library: void*, name: c.str) -> void*!:
+    return dlsym(library, name) else error(failed, "the installed Xlib lacks a function the window needs")
+
+func x11_load(library: void*) -> X11Api!:
+    return X11Api(
+        open_display = (func(c.str?) -> void*?)(try x11_symbol(library, "XOpenDisplay")),
+        default_screen = (func(void*) -> i32)(try x11_symbol(library, "XDefaultScreen")),
+        root_window = (func(void*, i32) -> u64)(try x11_symbol(library, "XRootWindow")),
+        connection_number = (func(void*) -> i32)(try x11_symbol(library, "XConnectionNumber")),
+        create_simple_window = (func(void*, u64, i32, i32, u32, u32, u32, u64, u64) -> u64)(try x11_symbol(library, "XCreateSimpleWindow")),
+        destroy_window = (func(void*, u64) -> i32)(try x11_symbol(library, "XDestroyWindow")),
+        map_window = (func(void*, u64) -> i32)(try x11_symbol(library, "XMapWindow")),
+        unmap_window = (func(void*, u64) -> i32)(try x11_symbol(library, "XUnmapWindow")),
+        resize_window = (func(void*, u64, u32, u32) -> i32)(try x11_symbol(library, "XResizeWindow")),
+        select_input = (func(void*, u64, i64) -> i32)(try x11_symbol(library, "XSelectInput")),
+        intern_atom = (func(void*, c.str, i32) -> u64)(try x11_symbol(library, "XInternAtom")),
+        set_wm_protocols = (func(void*, u64, u64*, i32) -> i32)(try x11_symbol(library, "XSetWMProtocols")),
+        store_name = (func(void*, u64, c.str) -> i32)(try x11_symbol(library, "XStoreName")),
+        change_property = (func(void*, u64, u64, u64, i32, i32, const u8*, i32) -> i32)(try x11_symbol(library, "XChangeProperty")),
+        delete_property = (func(void*, u64, u64) -> i32)(try x11_symbol(library, "XDeleteProperty")),
+        set_wm_normal_hints = (func(void*, u64, XSizeHints*) -> unit)(try x11_symbol(library, "XSetWMNormalHints")),
+        send_event = (func(void*, u64, i32, i64, void*) -> i32)(try x11_symbol(library, "XSendEvent")),
+        flush = (func(void*) -> i32)(try x11_symbol(library, "XFlush")),
+        pending = (func(void*) -> i32)(try x11_symbol(library, "XPending")),
+        events_queued = (func(void*, i32) -> i32)(try x11_symbol(library, "XEventsQueued")),
+        next_event = (func(void*, void*) -> i32)(try x11_symbol(library, "XNextEvent")),
+        peek_event = (func(void*, void*) -> i32)(try x11_symbol(library, "XPeekEvent")),
+        filter_event = (func(void*, u64) -> i32)(try x11_symbol(library, "XFilterEvent")),
+        get_default = (func(void*, c.str, c.str) -> u8*?)(try x11_symbol(library, "XGetDefault")),
+        create_font_cursor = (func(void*, u32) -> u64)(try x11_symbol(library, "XCreateFontCursor")),
+        define_cursor = (func(void*, u64, u64) -> i32)(try x11_symbol(library, "XDefineCursor")),
+        free_cursor = (func(void*, u64) -> i32)(try x11_symbol(library, "XFreeCursor")),
+        open_im = (func(void*, void*?, void*?, void*?) -> void*?)(try x11_symbol(library, "XOpenIM")),
+        create_ic = (func(void*, c.str, i64, c.str, u64, void*?) -> void*?)(try x11_symbol(library, "XCreateIC")),
+        destroy_ic = (func(void*) -> unit)(try x11_symbol(library, "XDestroyIC")),
+        set_ic_focus = (func(void*) -> unit)(try x11_symbol(library, "XSetICFocus")),
+        unset_ic_focus = (func(void*) -> unit)(try x11_symbol(library, "XUnsetICFocus")),
+        utf8_lookup_string = (func(void*, void*, u8*, i32, u64*?, i32*?) -> i32)(try x11_symbol(library, "Xutf8LookupString")),
+        lookup_string = (func(void*, u8*, i32, u64*?, void*?) -> i32)(try x11_symbol(library, "XLookupString")),
+        detectable_auto_repeat = (func(void*, i32, i32*?) -> i32)(try x11_symbol(library, "XkbSetDetectableAutoRepeat")))
+
+## The connection, opened with the first window.
+func x11_connect() -> X11Connection!:
+    if let open = x11_connection:
+        return open
+    # RTLD_NOW: every symbol is resolved here, not at a later call.
+    let library = dlopen("libX11.so.6", 2) else error(unsupported, "X11 (libX11.so.6) is not installed")
+    let api = try x11_load(library)
+    let display = api.open_display(none) else error(unsupported, "no X11 display is available (is DISPLAY set?)")
+    var fds: i32[2] = [0, 0]
+    # O_NONBLOCK | O_CLOEXEC: wake() never blocks, and children do not inherit it.
+    if pipe2(&fds[0], 2048 | 524288) != 0:
+        error(failed, "the window's wake pipe could not be created")
+    var repeat_known: i32 = 0
+    let detectable = api.detectable_auto_repeat(display, 1, &repeat_known) != 0 and repeat_known != 0
+    # The input method, if one runs; text then comes composed from it.
+    let im = api.open_im(display, none, none, none)
+    let connection = X11Connection(api = api, display = display, root = api.root_window(display, api.default_screen(display)),
+                                   scale = x11_dpi_scale(api, display),
+                                   wm_protocols = api.intern_atom(display, "WM_PROTOCOLS", 0), wm_delete = api.intern_atom(display, "WM_DELETE_WINDOW", 0),
+                                   wm_class = api.intern_atom(display, "WM_CLASS", 0),
+                                   net_wm_name = api.intern_atom(display, "_NET_WM_NAME", 0), utf8_string = api.intern_atom(display, "UTF8_STRING", 0),
+                                   net_wm_state = api.intern_atom(display, "_NET_WM_STATE", 0), net_wm_fullscreen = api.intern_atom(display, "_NET_WM_STATE_FULLSCREEN", 0),
+                                   im = im, detectable_repeat = detectable, wake_read = fds[0])
+    x11_connection = connection
+    x11_wake_fd.store((u32)(fds[1] + 1), .release)
+    return connection
+
+## Xft.dpi / 96, the scale desktops set for X11 applications (1 when unset).
+func x11_dpi_scale(api: X11Api, display: void*) -> f64:
+    let text = api.get_default(display, "Xft", "dpi") else return 1.0
+    var whole: f64 = 0.0
+    var fraction: f64 = 0.0
+    var place: f64 = 0.0
+    var index: usize = 0
+    while index < 32 and text[index] != 0:
+        let byte = text[index]
+        if byte == '.':
+            place = 0.1
+        elif byte >= '0' and byte <= '9':
+            if place > 0.0:
+                fraction += (f64)(byte - '0') * place
+                place *= 0.1
+            else:
+                whole = whole * 10.0 + (f64)(byte - '0')
+        else:
+            break
+        index += 1
+    let dpi = whole + fraction
+    return dpi / 96.0 if dpi >= 48.0 and dpi <= 960.0 else 1.0
+
+## The window whose XID is `window`, when it is one of ours.
+func x11_state_for(window: u64) -> State*?:
+    for slot in x11_windows:
+        if let state = slot:
+            if state.x_window == window:
+                return state
+    return none

@@ -26,7 +26,7 @@ def dependency "luce-window" {
 
 ## Platforms
 
-macOS (AppKit) and Windows (Win32, OLE drag and drop); Linux has no window backend yet.
+macOS (AppKit), Windows (Win32, OLE drag and drop) and Linux (X11 through Xlib, loaded at run time so no development packages are needed; it runs under Wayland desktops through XWayland; no drag and drop yet).
 
 Native libraries it links, by platform (declared in `package.prisma`, linked only when the program reaches code that needs them):
 

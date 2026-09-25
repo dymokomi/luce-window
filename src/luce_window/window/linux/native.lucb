@@ -1,0 +1,207 @@
+#==============================================================================================
+#
+#   native - The X11 window backend
+#
+#   DESCRIPTION:
+#       Creating, sizing and pumping Linux windows through Xlib. Drag and drop (XDND) and the
+#       live-resize redraw callback are not implemented yet: drop_paths stays empty and the
+#       redraw callback is never invoked, as X11 does not starve the event loop while resizing.
+#
+#==============================================================================================
+
+# The events a window listens for: keys, buttons, motion, crossing, exposure,
+# structure (map, unmap, configure) and focus.
+let x11_event_mask: i64 = 1 | 2 | 4 | 8 | 16 | 32 | 64 | (1 << 15) | (1 << 17) | (1 << 21)
+
+# mark: The window ============================================================================
+
+func x11_open(options: Options) -> State*!:
+    let x = try x11_connect()
+    var slot: usize = x11_windows.length
+    for index in 0..<x11_windows.length:
+        if x11_windows[index] == none:
+            slot = index
+            break
+    if slot == x11_windows.length:
+        error(failed, "at most sixteen X11 windows can be open")
+    let state = try new State() in memory.heap
+    errdefer free(state) in memory.heap
+    let width = (u32)math_round((f64)options.width * x.scale)
+    let height = (u32)math_round((f64)options.height * x.scale)
+    let window = x.api.create_simple_window(x.display, x.root, 0, 0, width, height, 0, 0, 0)
+    if window == 0:
+        error(failed, "the X11 window could not be created")
+    state.x_window = window
+    state.x_width = width
+    state.x_height = height
+    discard(x.api.select_input(x.display, window, x11_event_mask))
+    var protocols: u64[1] = [x.wm_delete]
+    discard(x.api.set_wm_protocols(x.display, window, &protocols[0], 1))
+    try x11_set_title(x, window, options.title)
+    x11_set_class(x, window)
+    if not options.resizable:
+        var hints = XSizeHints(flags = 16 | 32, min_width = (i32)width, min_height = (i32)height, max_width = (i32)width, max_height = (i32)height)
+        x.api.set_wm_normal_hints(x.display, window, &hints)
+    if let im = x.im:
+        # XIMPreeditNothing | XIMStatusNothing: composed text arrives committed.
+        state.x_ic = x.api.create_ic(im, "inputStyle", 0x0008 | 0x0400, "clientWindow", window, none)
+    x11_windows[slot] = state
+    try x11_set_cursor(state, input.Cursor.arrow)
+    discard(x.api.flush(x.display))
+    return state
+
+## The title as _NET_WM_NAME (UTF-8) for current desktops and WM_NAME for the rest.
+func x11_set_title(x: X11Connection, window: u64, title: str) -> !:
+    let text = try alloc u8[title.length + 1]
+    defer free(text)
+    for index in 0..<title.length:
+        text[index] = title.bytes[index]
+    text[title.length] = 0
+    discard(x.api.store_name(x.display, window, (c.str)text.data))
+    discard(x.api.change_property(x.display, window, x.net_wm_name, x.utf8_string, 8, 0, text.data, (i32)title.length))
+
+## WM_CLASS from the program's own name, so the desktop matches the window to
+## its launcher (luc's .desktop entries carry StartupWMClass=<program name>).
+func x11_set_class(x: X11Connection, window: u64):
+    var path: u8[512]
+    let length = readlink("/proc/self/exe", &path[0], 511)
+    if length <= 0:
+        return
+    var start: usize = 0
+    for index in 0..<(usize)length:
+        if path[index] == '/':
+            start = index + 1
+    let name = (usize)length - start
+    if name == 0 or name > 200:
+        return
+    # res_name and res_class, each ending in NUL.
+    var value: u8[402]
+    for index in 0..<name:
+        value[index] = path[start + index]
+        value[name + 1 + index] = path[start + index]
+    value[name] = 0
+    value[name * 2 + 1] = 0
+    # XA_STRING is atom 31.
+    discard(x.api.change_property(x.display, window, x.wm_class, 31, 8, 0, &value[0], (i32)(name * 2 + 2)))
+
+func x11_show(state: State*):
+    let x = x11_connection else return
+    discard(x.api.map_window(x.display, state.x_window))
+    discard(x.api.flush(x.display))
+
+func x11_size(state: State*) -> Size:
+    var scale = 1.0
+    if let x = x11_connection:
+        scale = x.scale
+    let width = (f64)state.x_width
+    let height = (f64)state.x_height
+    return Size(width = width / scale, height = height / scale, pixel_width = width, pixel_height = height, scale = scale)
+
+func x11_resize(state: State*, width: u32, height: u32) -> !:
+    let x = try x11_connect()
+    discard(x.api.resize_window(x.display, state.x_window, (u32)math_round((f64)width * x.scale), (u32)math_round((f64)height * x.scale)))
+    discard(x.api.flush(x.display))
+
+## Full screen through _NET_WM_STATE: set as the window's property before it is
+## mapped, asked of the window manager once it is. ConfigureNotify then queues
+## the resize.
+func x11_set_fullscreen(state: State*, enabled: bool) -> !:
+    if state.fullscreen == enabled:
+        return
+    let x = try x11_connect()
+    if state.x_mapped:
+        var event: XEventBuffer
+        let message = (XClientEvent*)(void*)&event
+        message.kind = x_client_message
+        message.window = state.x_window
+        message.message_type = x.net_wm_state
+        message.format = 32
+        message.data[0] = 1 if enabled else 0
+        message.data[1] = (i64)x.net_wm_fullscreen
+        message.data[3] = 1
+        # SubstructureRedirect | SubstructureNotify on the root: the window manager's.
+        discard(x.api.send_event(x.display, x.root, 0, (1 << 20) | (1 << 19), (void*)&event))
+    elif enabled:
+        var atom: u64 = x.net_wm_fullscreen
+        # XA_ATOM is atom 4.
+        discard(x.api.change_property(x.display, state.x_window, x.net_wm_state, 4, 32, 0, (const u8*)(void*)&atom, 1))
+    else:
+        discard(x.api.delete_property(x.display, state.x_window, x.net_wm_state))
+    discard(x.api.flush(x.display))
+    state.fullscreen = enabled
+
+func x11_visible(state: State*) -> bool:
+    return state.x_mapped
+
+func math_round(value: f64) -> f64:
+    let whole = (f64)(i64)value
+    return whole + 1.0 if value - whole >= 0.5 else whole
+
+# mark: The event pump ========================================================================
+
+## Translate queued X events into their windows' queues, stopping once `waiting` has one.
+func x11_pump(waiting: State*):
+    let x = x11_connection else return
+    var event: XEventBuffer
+    var count: usize = 0
+    while count < 256 and x.api.pending(x.display) > 0:
+        discard(x.api.next_event(x.display, (void*)&event))
+        count += 1
+        # The input method takes the keys it composes with.
+        if x.api.filter_event((void*)&event, 0) != 0:
+            continue
+        x11_dispatch(x, &event)
+        if waiting.count > 0 or waiting.close_requested or waiting.overflowed:
+            break
+
+## Block up to `timeout_ns` until the display or a wake() has something, then
+## drain like x11_pump. The resolution is milliseconds.
+func x11_wait(waiting: State*, timeout_ns: u64):
+    let x = x11_connection else return
+    discard(x.api.flush(x.display))
+    if x.api.pending(x.display) == 0:
+        let ms64 = (timeout_ns + 999999) // 1000000
+        let milliseconds: i32 = -1 if ms64 >= 0x7FFFFFFF else (i32)ms64
+        var fds: PollFd[2] = [PollFd(fd = x.api.connection_number(x.display), events = 1, revents = 0), PollFd(fd = x.wake_read, events = 1, revents = 0)]
+        discard(poll(&fds[0], 2, milliseconds))
+        var drained: u8[64]
+        while read(x.wake_read, (void*)&drained[0], 64) > 0:
+            continue
+    x11_pump(waiting)
+
+## Write a byte to the wake pipe, from any thread; a no-op before a window opens.
+func x11_wake() -> !:
+    let fd = x11_wake_fd.load(.acquire)
+    if fd == 0:
+        return
+    var byte: u8 = 1
+    discard(write((i32)fd - 1, (const void*)&byte, 1))
+
+# mark: Teardown ==============================================================================
+
+## The native window stays until the presentation lease goes, as a graphics
+## surface may still name it; until then it is only hidden.
+func x11_destroy(state: State*):
+    state.destroyed = true
+    if let x = x11_connection:
+        if state.x_window != 0:
+            discard(x.api.unmap_window(x.display, state.x_window))
+            discard(x.api.flush(x.display))
+    if not state.presentation_held:
+        x11_free(state)
+
+func x11_free(state: State*):
+    for index in 0..<x11_windows.length:
+        if let open = x11_windows[index]:
+            if open == state:
+                x11_windows[index] = none
+    clear_drop_paths(state)
+    if let x = x11_connection:
+        if let ic = state.x_ic:
+            x.api.destroy_ic(ic)
+        if state.x_window != 0:
+            discard(x.api.destroy_window(x.display, state.x_window))
+        if state.x_cursor != 0:
+            discard(x.api.free_cursor(x.display, state.x_cursor))
+        discard(x.api.flush(x.display))
+    free(state) in memory.heap

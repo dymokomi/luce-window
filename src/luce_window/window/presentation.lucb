@@ -21,6 +21,8 @@ pub struct Presentation:
             return mac_size(state)
         if platform.windows:
             return win_size(state)
+        if platform.linux:
+            return x11_size(state)
         error(unsupported, "native windows are not implemented for this target")
 
     ## Hidden or minimized windows should not acquire display buffers. Occlusion
@@ -33,6 +35,9 @@ pub struct Presentation:
         if platform.windows:
             let native = required(state.native)
             return IsWindowVisible(native) != 0 and IsIconic(native) == 0
+        if platform.linux:
+            # Mapped: shown and not minimized (an iconified window is unmapped).
+            return x11_visible(state)
         error(unsupported, "native windows are not implemented for this target")
 
     ## Platform bridge for graphics backends, not a drawing API. The borrowed
@@ -52,6 +57,21 @@ pub struct Presentation:
             return required(state.native)
         error(unsupported, "this window has no Windows handle")
 
+    ## Borrowed X11 Display* for graphics backends, valid until window destruction.
+    pub func x11_display() -> void*!:
+        discard(try self.checked())
+        if platform.linux:
+            let x = x11_connection else error(closed, "the X11 connection is closed")
+            return x.display
+        error(unsupported, "this window has no X11 display")
+
+    ## The X11 window (XID) for graphics backends, valid until window destruction.
+    pub func x11_window() -> u64!:
+        let state = try self.checked()
+        if platform.linux:
+            return state.x_window
+        error(unsupported, "this window has no X11 window")
+
     ## Release the lease on the main thread.
     pub mutating func destroy():
         let state = self.state else return
@@ -65,6 +85,8 @@ pub struct Presentation:
                 mac_free(state)
         if platform.windows and state.destroyed:
             win_free(state)
+        if platform.linux and state.destroyed:
+            x11_free(state)
 
     func checked() -> State*!:
         try check_thread()
