@@ -23,6 +23,12 @@ struct State:
     var text_input: bool
     var pending_surrogate: u16
     var pointer_tracking: bool
+    ## Windows: the last pointer move delivered, in screen pixels at its
+    ## message time, so the moves Win32 merged since can be recovered.
+    var move_known: bool
+    var move_x: i32
+    var move_y: i32
+    var move_time: u32
     var cursor: input.Cursor
     var native_cursor: void*?
     var pointer_inside: bool
