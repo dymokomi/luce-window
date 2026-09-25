@@ -92,7 +92,9 @@ func win_setup() -> !:
     var info = WinClass(size = (u32)sizeof(WinClass), procedure = win_callback,
                         instance = GetModuleHandleW(none), cursor = LoadCursorW(none, (u16*)32512),
                         brush = (void*)6, name = &win_class_name[0])
-    win_class_atom = RegisterClassExW(&info)
+    # Through a local of its type: the class atom is a 16-bit C result.
+    let atom: u16 = RegisterClassExW(&info)
+    win_class_atom = atom
     if win_class_atom == 0:
         error(failed, "the native window class could not be registered")
 

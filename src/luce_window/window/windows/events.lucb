@@ -24,9 +24,15 @@ struct WinMouseTracking:
 extern func TrackMouseEvent(tracking: WinMouseTracking*) -> i32
 
 func win_modifiers() -> input.Modifiers:
-    return input.Modifiers(shift = GetKeyState(16) < 0, control = GetKeyState(17) < 0,
-                           alt = GetKeyState(18) < 0, super = GetKeyState(91) < 0 or GetKeyState(92) < 0,
-                           caps_lock = (GetKeyState(20) & 1) != 0)
+    return input.Modifiers(shift = key_down(16), control = key_down(17), alt = key_down(18), super = key_down(91) or key_down(92),
+                           caps_lock = ((u16)GetKeyState(20) & 1) != 0)
+
+## Whether virtual key `key` is held: bit 15 of GetKeyState's state. Read as
+## bits, not as a sign, and through a local, so a compiler that leaves the
+## bits above a 16-bit C result undefined cannot misread it.
+func key_down(key: i32) -> bool:
+    let state: i16 = GetKeyState(key)
+    return ((u16)state & 0x8000) != 0
 
 func signed_half(value: isize) -> i32:
     let half = (i32)(value & 65535)
