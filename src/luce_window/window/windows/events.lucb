@@ -184,7 +184,6 @@ func win_callback(native: void*, message: u32, word: usize, value: isize) -> isi
 func push_merged_moves(state: State*, native: void*, client: WinPoint, held: bool, scale: f64, held_keys: input.Modifiers):
     var screen = client
     discard(ClientToScreen(native, &screen))
-    let time = (u32)GetMessageTime()
     let known = state.move_known
     let last_x = state.move_x
     let last_y = state.move_y
@@ -192,22 +191,26 @@ func push_merged_moves(state: State*, native: void*, client: WinPoint, held: boo
     state.move_known = true
     state.move_x = screen.x
     state.move_y = screen.y
-    state.move_time = time
+    state.move_time = (u32)GetMessageTime()
     if not held or not known:
         return
-    var current = WinMovePoint(x = screen.x & 65535, y = screen.y & 65535, time = time, extra = 0)
+    var current = WinMovePoint(x = screen.x & 65535, y = screen.y & 65535, time = state.move_time, extra = 0)
     var merged: WinMovePoint[64]
     # GMMP_USE_DISPLAY_POINTS; a position not in the history (-1) gives none.
     let found = GetMouseMovePointsEx((u32)sizeof(WinMovePoint), &current, &merged[0], 64, 1)
-    if found <= 1:
+    if found < 1:
         return
-    # Newest first: the first entry is the current move; stop at the last one delivered.
+    # The history's own time for this point: a merged move is stamped when it
+    # is read, later than the points it merged, so that stamp would cut them.
+    state.move_time = merged[0].time
+    # Newest first: the first entry is the current move; stop at the one last
+    # delivered (its position at its time), or anything older.
     var count: i32 = 1
     while count < found:
         let entry = merged[(usize)count]
         let x = entry.x - 65536 if entry.x > 32767 else entry.x
         let y = entry.y - 65536 if entry.y > 32767 else entry.y
-        if entry.time < last_time or (x == last_x and y == last_y):
+        if entry.time < last_time or (entry.time == last_time and x == last_x and y == last_y):
             break
         count += 1
     var index = count - 1
