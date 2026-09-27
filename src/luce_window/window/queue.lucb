@@ -30,6 +30,8 @@ struct State:
     var move_y: i32
     var move_time: u32
     var cursor: input.Cursor
+    ## macOS: whether the last proximity event brought the pen's eraser end near.
+    var mac_eraser: bool
     var native_cursor: void*?
     var pointer_inside: bool
     var primary_down: bool

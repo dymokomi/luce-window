@@ -53,6 +53,8 @@ extern func msg_key as "objc_msgSend"(object: void*, selector: void*) -> u16
 extern func msg_character as "objc_msgSend"(object: void*, selector: void*, index: usize) -> u16
 extern func msg_one_object as "objc_msgSend"(object: void*, selector: void*, value: void*) -> void*?
 extern func msg_double as "objc_msgSend"(object: void*, selector: void*) -> f64
+## A `float` property (pressure, rotation, tangentialPressure): returned in s0, not d0.
+extern func msg_float as "objc_msgSend"(object: void*, selector: void*) -> f32
 extern func msg_policy as "objc_msgSend"(object: void*, selector: void*, policy: i64) -> bool
 extern func msg_rect as "objc_msgSend"(object: void*, selector: void*) -> LuceWindowMacRect
 extern func msg_backing as "objc_msgSend"(object: void*, selector: void*, rect: LuceWindowMacRect) -> LuceWindowMacRect

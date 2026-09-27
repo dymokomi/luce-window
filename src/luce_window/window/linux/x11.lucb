@@ -291,6 +291,8 @@ func x11_connect() -> X11Connection!:
                                    net_wm_state = api.intern_atom(display, "_NET_WM_STATE", 0), net_wm_fullscreen = api.intern_atom(display, "_NET_WM_STATE_FULLSCREEN", 0),
                                    im = im, detectable_repeat = detectable, wake_read = fds[0])
     x11_connection = connection
+    # Tablet pens, through XI2 when libXi is installed (linux/pen.lucb).
+    x11_pen_load(library, display, connection.root)
     x11_wake_fd.store((u32)(fds[1] + 1), .release)
     return connection
 

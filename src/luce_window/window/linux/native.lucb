@@ -55,6 +55,7 @@ func x11_open(options: Options) -> State*!:
         # XIMPreeditNothing | XIMStatusNothing: composed text arrives committed.
         state.x_ic = x.api.create_ic(im, "inputStyle", 0x0008 | 0x0400, "clientWindow", window, none)
     x11_windows[slot] = state
+    x11_pen_select(x.display, window)
     try x11_set_cursor(state, input.Cursor.arrow)
     discard(x.api.flush(x.display))
     return state
@@ -158,6 +159,10 @@ func x11_pump(waiting: State*):
         count += 1
         # The input method takes the keys it composes with.
         if x.api.filter_event((void*)&event, 0) != 0:
+            continue
+        # XI2's events (a pen's axes, devices plugged in) name no window.
+        if (*(XAnyEvent*)(void*)&event).kind == x_generic_event:
+            x11_generic(x, &event)
             continue
         x11_dispatch(x, &event)
         if waiting.count > 0 or waiting.close_requested or waiting.overflowed:

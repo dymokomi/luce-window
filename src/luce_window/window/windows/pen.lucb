@@ -1,0 +1,192 @@
+#==============================================================================================
+#
+#   pen - Windows Ink pens through WM_POINTER
+#
+#   DESCRIPTION:
+#       A pen (Windows Ink: every Wacom and Surface pen whose driver has Windows Ink on) sends
+#       WM_POINTER messages; handling them here, rather than letting DefWindowProc turn them
+#       into mouse messages, is what carries its pressure, tilt, rotation and eraser. Mouse
+#       and touch are left to the mouse messages (EnableMouseInPointer is not called, so the
+#       mouse keeps its merged-move recovery); a touch's promoted mouse messages are marked
+#       touch by their extra-info signature. See docs/PEN.md.
+#
+#==============================================================================================
+
+# mark: Win32 pointer bindings =================================================================
+
+## POINTER_INFO, 96 bytes on x64.
+extern struct WinPointerInfo:
+    pointer_type: u32
+    pointer_id: u32
+    frame_id: u32
+    flags: u32
+    source_device: void*?
+    target: void*?
+    pixel: WinPoint
+    himetric: WinPoint
+    pixel_raw: WinPoint
+    himetric_raw: WinPoint
+    time: u32
+    history_count: u32
+    input_data: i32
+    key_states: u32
+    performance_count: u64
+    button_change: i32
+
+## POINTER_PEN_INFO, 120 bytes on x64: pressure 0..1024, rotation 0..359
+## degrees clockwise, tilt -90..90 degrees, each valid when its mask bit is set.
+extern struct WinPenInfo:
+    info: WinPointerInfo
+    pen_flags: u32
+    pen_mask: u32
+    pressure: u32
+    rotation: u32
+    tilt_x: i32
+    tilt_y: i32
+
+extern func GetPointerType(pointer: u32, kind: u32*) -> i32
+extern func GetPointerPenInfo(pointer: u32, info: WinPenInfo*) -> i32
+extern func GetPointerPenInfoHistory(pointer: u32, count: u32*, info: WinPenInfo*) -> i32
+extern func GetMessageExtraInfo() -> isize
+
+let wm_pointer_update: u32 = 0x0245
+let wm_pointer_down: u32 = 0x0246
+let wm_pointer_up: u32 = 0x0247
+let wm_pointer_enter: u32 = 0x0249
+let wm_pointer_leave: u32 = 0x024A
+## PT_PEN.
+let pointer_type_pen: u32 = 3
+## PEN_FLAG_INVERTED (the eraser end near) and PEN_FLAG_ERASER (it pressing).
+let pen_flag_inverted: u32 = 2
+let pen_flag_eraser: u32 = 4
+## PEN_MASK_PRESSURE, _ROTATION, _TILT_X and _TILT_Y.
+let pen_mask_pressure: u32 = 1
+let pen_mask_rotation: u32 = 2
+let pen_mask_tilt_x: u32 = 4
+let pen_mask_tilt_y: u32 = 8
+## POINTER_FLAG_INCONTACT: the tip (or eraser) is on the surface.
+let pointer_flag_in_contact: u32 = 4
+
+# mark: Messages ===============================================================================
+
+## Whether `message` is a pointer message this backend takes: a pen's. Other
+## pointers (a touch; the mouse never comes here) go on to DefWindowProc.
+func win_pointer_message(message: u32) -> bool:
+    return message == wm_pointer_update or message == wm_pointer_down or message == wm_pointer_up or message == wm_pointer_enter or message == wm_pointer_leave
+
+## Translate one pen WM_POINTER message; false when it is not a pen's, for
+## DefWindowProc to handle. A pen's merged samples (its history) come first,
+## oldest first, so a fast stroke keeps every sample the digitizer made.
+func win_pointer(state: State*, native: void*, message: u32, word: usize) -> bool:
+    let pointer = (u32)(word & 0xFFFF)
+    var kind: u32 = 0
+    if GetPointerType(pointer, &kind) == 0 or kind != pointer_type_pen:
+        return false
+    if message == wm_pointer_leave:
+        push_event(state, input.Event(kind = input.EventKind.pointer_left))
+        return true
+    var info: WinPenInfo
+    if GetPointerPenInfo(pointer, &info) == 0:
+        return false
+    let dpi = GetDpiForWindow(native)
+    let scale = (f64)dpi / 96.0 if dpi > 0 else 1.0
+    let held = win_modifiers()
+    if message == wm_pointer_update and info.info.history_count > 1:
+        var merged: WinPenInfo[32]
+        var count: u32 = min_count(info.info.history_count, 32)
+        if GetPointerPenInfoHistory(pointer, &count, &merged[0]) != 0 and count > 1:
+            # Newest first; the newest is this message's own sample.
+            var index = (i64)count - 1
+            while index >= 1:
+                push_event(state, win_pen_at(native, merged[(usize)index], input.EventKind.pointer_moved, 0, scale, held))
+                index -= 1
+    var event_kind = input.EventKind.pointer_moved
+    if message == wm_pointer_down:
+        event_kind = input.EventKind.pointer_down
+    elif message == wm_pointer_up:
+        event_kind = input.EventKind.pointer_up
+    elif message == wm_pointer_enter:
+        event_kind = input.EventKind.pointer_entered
+    push_event(state, win_pen_at(native, info, event_kind, win_pen_button(info.info.button_change), scale, held))
+    return true
+
+## A pen sample at its place in the window's client area, in points.
+func win_pen_at(native: void*, info: WinPenInfo, kind: input.EventKind, button: u32, scale: f64, held: input.Modifiers) -> input.Event:
+    var position = info.info.pixel
+    discard(ScreenToClient(native, &position))
+    return win_pen_event(info, kind, button, (f64)position.x / scale, (f64)position.y / scale, held)
+
+func min_count(a: u32, b: u32) -> u32:
+    return a if a < b else b
+
+# mark: Decoding ===============================================================================
+
+## A pen sample as a portable event at `x`, `y` points: pressure 0..1024 to
+## 0..1 (zero while hovering), Windows' tilt already in W3C degrees, rotation
+## clockwise, and the eraser end from the inverted or eraser flag.
+func win_pen_event(info: WinPenInfo, kind: input.EventKind, button: u32, x: f64, y: f64, held: input.Modifiers) -> input.Event:
+    var event = input.Event(kind = kind, x = x, y = y, button = button, modifiers = held)
+    let flags = info.pen_flags
+    event.pointer_kind = input.PointerKind.eraser if (flags & (pen_flag_inverted | pen_flag_eraser)) != 0 else input.PointerKind.pen
+    let touching = (info.info.flags & pointer_flag_in_contact) != 0
+    if (info.pen_mask & pen_mask_pressure) != 0 and touching:
+        event.pressure = math.clamp((f64)info.pressure / 1024.0, 0.0, 1.0)
+    elif touching:
+        # A pen without pressure presses fully.
+        event.pressure = 1.0
+    if (info.pen_mask & pen_mask_rotation) != 0:
+        event.rotation = (f64)(info.rotation % 360)
+    if (info.pen_mask & pen_mask_tilt_x) != 0:
+        event.tilt_x = math.clamp((f64)info.tilt_x, -90.0, 90.0)
+    if (info.pen_mask & pen_mask_tilt_y) != 0:
+        event.tilt_y = math.clamp((f64)info.tilt_y, -90.0, 90.0)
+    return input.with_pen_angles(event)
+
+## The portable button a POINTER_BUTTON_CHANGE_TYPE names: the tip is the
+## first button (0), the barrel button the second (1, a right click).
+func win_pen_button(change: i32) -> u32:
+    if change == 3 or change == 4:
+        return 1
+    if change == 5 or change == 6:
+        return 2
+    return 0
+
+## The pointer kind of a mouse message Windows made from a touch or a pen:
+## its extra info carries MI_WP_SIGNATURE (0xFF515700), with bit 0x80 for touch.
+func win_promoted_kind(extra: usize) -> input.PointerKind:
+    if (extra & 0xFFFFFF00) != 0xFF515700:
+        return input.PointerKind.mouse
+    return input.PointerKind.touch if (extra & 0x80) != 0 else input.PointerKind.pen
+
+test "Windows pen info decodes to pressure 0..1, tilt, rotation and its end":
+    var info: WinPenInfo
+    assert(sizeof(WinPointerInfo) == 96 and sizeof(WinPenInfo) == 120)
+    info.info.flags = pointer_flag_in_contact
+    info.pen_mask = pen_mask_pressure | pen_mask_rotation | pen_mask_tilt_x | pen_mask_tilt_y
+    info.pressure = 512
+    info.rotation = 370
+    info.tilt_x = 0
+    info.tilt_y = 30
+    let held = input.Modifiers(shift = true)
+    let event = win_pen_event(info, input.EventKind.pointer_down, 0, 12.5, 7.0, held)
+    assert(event.pointer_kind == input.PointerKind.pen and event.pressure == 0.5 and event.x == 12.5 and event.modifiers.shift)
+    assert(event.rotation == 10.0 and event.tilt_x == 0.0 and event.tilt_y == 30.0)
+    assert(event.azimuth == 90.0 and event.altitude == 60.0)
+    # Hovering: no pressure; the eraser end near is the eraser.
+    info.info.flags = 0
+    info.pen_flags = pen_flag_inverted
+    let hover = win_pen_event(info, input.EventKind.pointer_moved, 0, 0.0, 0.0, held)
+    assert(hover.pressure == 0.0 and hover.pointer_kind == input.PointerKind.eraser)
+    # A pen without a pressure sensor, touching, presses fully; without tilt it stands upright.
+    info.info.flags = pointer_flag_in_contact
+    info.pen_flags = pen_flag_eraser
+    info.pen_mask = 0
+    let plain = win_pen_event(info, input.EventKind.pointer_moved, 0, 0.0, 0.0, held)
+    assert(plain.pressure == 1.0 and plain.altitude == 90.0 and plain.pointer_kind == input.PointerKind.eraser)
+
+test "Windows pen buttons and promoted mouse messages are told apart":
+    assert(win_pen_button(1) == 0 and win_pen_button(2) == 0 and win_pen_button(3) == 1 and win_pen_button(4) == 1 and win_pen_button(0) == 0)
+    assert(win_promoted_kind(0) == input.PointerKind.mouse)
+    assert(win_promoted_kind(0xFF515780) == input.PointerKind.touch)
+    assert(win_promoted_kind(0xFF515701) == input.PointerKind.pen)
+    assert(win_pointer_message(0x0245) and not win_pointer_message(0x0200))

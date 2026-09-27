@@ -89,16 +89,73 @@ func pointer_callback(object: void*, selector: void*, native: void*):
         event.kind = input.EventKind.magnify
         event.scroll_y = msg_double(native, sel("magnification"))
         event.scroll_unit = input.ScrollUnit.points
-    # Tablet points (subtype 1) carry the stylus pressure; everything else presses fully.
-    if (native_type >= 1 and native_type <= 7) or native_type == 25 or native_type == 26 or native_type == 27:
-        if msg_uint(native, sel("subtype")) == 1:
-            event.pressure = msg_double(native, sel("pressure"))
+    elif native_type == 24:
+        # NSEventTypeTabletProximity: which end of which tool came near, or left.
+        mac_proximity(state, native)
+        return
+    # Tablet points (NSEventTypeTabletPoint, or a mouse event of subtype 1) carry
+    # the pen's pressure, tilt, rotation and wheel; a mouse event of subtype 2
+    # carries a proximity change. Everything else is the mouse's.
+    let pointing = (native_type >= 1 and native_type <= 7) or native_type == 25 or native_type == 26 or native_type == 27
+    if native_type == 23 or pointing:
+        let subtype = msg_uint(native, sel("subtype")) if pointing else 1
+        if subtype == 2:
+            mac_proximity(state, native)
+        if subtype == 1:
+            let tilt = msg_point(native, sel("tilt"))
+            event = mac_pen(event, input.PointerKind.eraser if state.mac_eraser else input.PointerKind.pen, msg_float(native, sel("pressure")), tilt.x, tilt.y,
+                            msg_float(native, sel("rotation")), msg_float(native, sel("tangentialPressure")))
     let bounds = msg_rect(object, sel("bounds"))
     state.pointer_inside = position.x >= 0.0 and position.y >= 0.0 and position.x < bounds.size.width and position.y < bounds.size.height
     if event.button == 0:
         if event.kind == input.EventKind.pointer_down: state.primary_down = true
         if event.kind == input.EventKind.pointer_up: state.primary_down = false
     push_event(state, event)
+
+## A proximity event: the tool's end that came near (NSPointingDeviceType 3
+## is the eraser), kept for the tablet points that follow.
+func mac_proximity(state: State*, native: void*):
+    let entering = msg_bool(native, sel("isEnteringProximity"))
+    state.mac_eraser = mac_pointing_kind(msg_uint(native, sel("pointingDeviceType")), entering) == input.PointerKind.eraser
+
+## The pointer kind for NSPointingDeviceType `device` coming near (or leaving).
+func mac_pointing_kind(device: u64, entering: bool) -> input.PointerKind:
+    if not entering:
+        return input.PointerKind.pen
+    return input.PointerKind.eraser if device == 3 else input.PointerKind.pen
+
+## `event` with a tablet point's values: AppKit's pressure 0..1, tilt as -1..1
+## per axis with y up (scaled as Qt does, to about the 60 degrees tablets
+## reach, y turned to point down the screen), rotation in degrees
+## counter-clockwise, and the airbrush wheel's tangential pressure.
+func mac_pen(event: input.Event, kind: input.PointerKind, pressure: f32, tilt_x: f64, tilt_y: f64, rotation: f32, tangential: f32) -> input.Event:
+    var pen = event
+    pen.pointer_kind = kind
+    pen.pressure = math.clamp((f64)pressure, 0.0, 1.0) if math.is_finite((f64)pressure) else 0.0
+    pen.tilt_x = math.clamp(tilt_x * 60.0, -90.0, 90.0) if math.is_finite(tilt_x) else 0.0
+    pen.tilt_y = math.clamp(-tilt_y * 60.0, -90.0, 90.0) if math.is_finite(tilt_y) else 0.0
+    var turned = 360.0 - (f64)rotation if math.is_finite((f64)rotation) else 0.0
+    turned -= math.floor(turned / 360.0) * 360.0
+    pen.rotation = turned
+    pen.tangential = math.clamp((f64)tangential, -1.0, 1.0) if math.is_finite((f64)tangential) else 0.0
+    return input.with_pen_angles(pen)
+
+test "a macOS tablet point reads as a pen with its tilt in degrees, y down the screen":
+    let base = input.Event(kind = input.EventKind.pointer_moved, x = 10.0, y = 20.0)
+    let pen = mac_pen(base, input.PointerKind.pen, 0.5, 0.5, 0.5, 90.0, 0.25)
+    assert(pen.pointer_kind == input.PointerKind.pen and pen.pressure == 0.5 and pen.x == 10.0)
+    assert(pen.tilt_x == 30.0 and pen.tilt_y == -30.0)
+    # Leaning right and up the screen: between 270 and 360.
+    assert(pen.azimuth > 270.0 and pen.azimuth < 360.0 and pen.altitude < 60.0)
+    assert(pen.rotation == 270.0 and pen.tangential == 0.25)
+    let flat = mac_pen(base, input.PointerKind.eraser, 2.0, 0.0, 0.0, -30.0, -3.0)
+    assert(flat.pointer_kind == input.PointerKind.eraser and flat.pressure == 1.0 and flat.altitude == 90.0)
+    assert(flat.rotation == 30.0 and flat.tangential == -1.0)
+
+test "the eraser end is known from its proximity event":
+    assert(mac_pointing_kind(3, true) == input.PointerKind.eraser)
+    assert(mac_pointing_kind(1, true) == input.PointerKind.pen)
+    assert(mac_pointing_kind(3, false) == input.PointerKind.pen)
 
 ## Hardware positions from the macOS HIToolbox virtual-key table. Zero slots
 ## deliberately remain unknown (including keypad/international keys for now).

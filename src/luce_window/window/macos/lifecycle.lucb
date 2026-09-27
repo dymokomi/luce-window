@@ -51,6 +51,9 @@ func setup_classes() -> !:
         var pointer: c.str[14] = ["mouseDown:", "mouseUp:", "rightMouseDown:", "rightMouseUp:", "otherMouseDown:", "otherMouseUp:", "mouseMoved:", "mouseDragged:", "rightMouseDragged:", "otherMouseDragged:", "scrollWheel:", "mouseEntered:", "mouseExited:", "magnifyWithEvent:"]
         for name in pointer:
             try add_method(native_type, name, (void*)pointer_callback, "v@:@")
+        # A pen pressing harder without moving, and a tool coming near or leaving.
+        try add_method(native_type, "tabletPoint:", (void*)pointer_callback, "v@:@")
+        try add_method(native_type, "tabletProximity:", (void*)pointer_callback, "v@:@")
         objc_registerClassPair(native_type)
         view_class = native_type
 

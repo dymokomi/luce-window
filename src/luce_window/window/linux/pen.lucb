@@ -1,0 +1,390 @@
+#==============================================================================================
+#
+#   pen - Tablet pens through the X Input Extension 2
+#
+#   DESCRIPTION:
+#       Core X events carry no pressure. libXi.so.6 is opened at run time (like Xlib, nothing
+#       is linked) and each window selects XI2 motion and button events on the slave devices
+#       that are pens: those with an "Abs Pressure" valuator, or named as an eraser or a touch
+#       screen. Their events only record the device's latest axes; the core event of the same
+#       moment, handled as before, then takes them. Selecting on slave devices alone leaves
+#       the master pointer's core events flowing, so nothing else changes. A tablet plugged in
+#       later is found again on XI_HierarchyChanged. See docs/PEN.md.
+#
+#==============================================================================================
+
+# mark: XI2 ABI ================================================================================
+
+## XIEventMask.
+extern struct XIEventMask:
+    deviceid: i32
+    mask_len: i32
+    mask: u8*
+
+## XIDeviceInfo.
+extern struct XIDeviceInfo:
+    deviceid: i32
+    name: u8*
+    use: i32
+    attachment: i32
+    enabled: i32
+    num_classes: i32
+    classes: void**
+
+## XIValuatorClassInfo (class type 2).
+extern struct XIValuatorClassInfo:
+    kind: i32
+    sourceid: i32
+    number: i32
+    label: u64
+    min: f64
+    max: f64
+    value: f64
+    resolution: i32
+    mode: i32
+
+## XGenericEventCookie, read from the XEvent union.
+extern struct XGenericEventCookie:
+    kind: i32
+    serial: u64
+    send_event: i32
+    display: void*?
+    extension: i32
+    evtype: i32
+    cookie: u32
+    data: void*?
+
+extern struct XIButtonState:
+    mask_len: i32
+    mask: u8*?
+
+extern struct XIValuatorState:
+    mask_len: i32
+    mask: u8*?
+    values: f64*?
+
+## XIDeviceEvent, as far as the valuators.
+extern struct XIDeviceEvent:
+    kind: i32
+    serial: u64
+    send_event: i32
+    display: void*?
+    extension: i32
+    evtype: i32
+    time: u64
+    deviceid: i32
+    sourceid: i32
+    detail: i32
+    root: u64
+    event: u64
+    child: u64
+    root_x: f64
+    root_y: f64
+    event_x: f64
+    event_y: f64
+    flags: i32
+    buttons: XIButtonState
+    valuators: XIValuatorState
+
+let x_generic_event: i32 = 35
+let xi_button_press: i32 = 4
+let xi_button_release: i32 = 5
+let xi_motion: i32 = 6
+let xi_hierarchy_changed: i32 = 11
+let xi_slave_pointer: i32 = 3
+let xi_floating_slave: i32 = 5
+let xi_valuator_class: i32 = 2
+
+## libXi's functions, and the X Input opcode that marks its events.
+struct XiApi:
+    var query_version: func(void*, i32*, i32*) -> i32
+    var select_events: func(void*, u64, XIEventMask*, i32) -> i32
+    var query_device: func(void*, i32, i32*) -> XIDeviceInfo*?
+    var free_device_info: func(XIDeviceInfo*) -> unit
+    var query_extension: func(void*, c.str, i32*, i32*, i32*) -> i32
+    var get_event_data: func(void*, XGenericEventCookie*) -> i32
+    var free_event_data: func(void*, XGenericEventCookie*) -> unit
+    var get_atom_name: func(void*, u64) -> u8*?
+    var x_free: func(void*) -> i32
+    var opcode: i32
+
+# mark: Pens ===================================================================================
+
+## What an axis means to a pen.
+let axis_pressure: usize = 0
+let axis_tilt_x: usize = 1
+let axis_tilt_y: usize = 2
+let axis_wheel: usize = 3
+let axis_rotation: usize = 4
+
+## One valuator a pen reports: its number plus one (0: the pen has none), its
+## range and the last value seen (XI2 events carry only the valuators that changed).
+struct X11Axis:
+    var slot: i32
+    var min: f64
+    var max: f64
+    var value: f64
+
+## A pen device: its XI2 id, which end or kind it is, its axes, and when its
+## last sample came.
+struct X11Pen:
+    var id: i32
+    var kind: input.PointerKind
+    var axes: X11Axis[5]
+    var time: u64
+
+var x11_xi: XiApi? = none
+var x11_pens: X11Pen[16]
+var x11_pen_count: usize = 0
+## The pen that sampled last, plus one (0: none yet).
+var x11_last_pen: usize = 0
+
+## Open libXi and ask for XI 2.0; without either there are no pens, only the mouse.
+func x11_pen_load(library: void*, display: void*, root: u64):
+    let xi_library = dlopen("libXi.so.6", 2) else return
+    let version = dlsym(xi_library, "XIQueryVersion") else return
+    let select = dlsym(xi_library, "XISelectEvents") else return
+    let query = dlsym(xi_library, "XIQueryDevice") else return
+    let release = dlsym(xi_library, "XIFreeDeviceInfo") else return
+    let extension = dlsym(library, "XQueryExtension") else return
+    let get_data = dlsym(library, "XGetEventData") else return
+    let free_data = dlsym(library, "XFreeEventData") else return
+    let atom_name = dlsym(library, "XGetAtomName") else return
+    let x_free = dlsym(library, "XFree") else return
+    var api = XiApi(query_version = (func(void*, i32*, i32*) -> i32)version, select_events = (func(void*, u64, XIEventMask*, i32) -> i32)select,
+                    query_device = (func(void*, i32, i32*) -> XIDeviceInfo*?)query, free_device_info = (func(XIDeviceInfo*) -> unit)release,
+                    query_extension = (func(void*, c.str, i32*, i32*, i32*) -> i32)extension, get_event_data = (func(void*, XGenericEventCookie*) -> i32)get_data,
+                    free_event_data = (func(void*, XGenericEventCookie*) -> unit)free_data, get_atom_name = (func(void*, u64) -> u8*?)atom_name,
+                    x_free = (func(void*) -> i32)x_free, opcode = 0)
+    var first_event: i32 = 0
+    var first_error: i32 = 0
+    if api.query_extension(display, "XInputExtension", &api.opcode, &first_event, &first_error) == 0:
+        return
+    var major: i32 = 2
+    var minor: i32 = 0
+    if api.query_version(display, &major, &minor) != 0 or major < 2:
+        return
+    x11_xi = api
+    x11_pen_scan(api, display)
+    # Tablets plugged in or out later: every device, the hierarchy event only.
+    var bits: u8[4] = [0, 1 << 3, 0, 0]
+    var mask = XIEventMask(deviceid = 0, mask_len = 4, mask = &bits[0])
+    discard(api.select_events(display, root, &mask, 1))
+
+## Find the pen devices: slave pointers with a pressure axis, or named as an
+## eraser or a touch screen.
+func x11_pen_scan(api: XiApi, display: void*):
+    x11_pen_count = 0
+    x11_last_pen = 0
+    var count: i32 = 0
+    let devices = api.query_device(display, 0, &count) else return
+    for index in 0..<(usize)(count if count > 0 else 0):
+        let device = devices[index]
+        if (device.use != xi_slave_pointer and device.use != xi_floating_slave) or x11_pen_count == x11_pens.length:
+            continue
+        var pen = X11Pen(id = device.deviceid, kind = x11_device_kind(device.name))
+        for which in 0..<(usize)(device.num_classes if device.num_classes > 0 else 0):
+            let class = (XIValuatorClassInfo*)(device.classes[which])
+            if class.kind != xi_valuator_class or class.label == 0:
+                continue
+            let name = api.get_atom_name(display, class.label) else continue
+            let role = x11_axis_role(name)
+            discard(api.x_free((void*)name))
+            if role >= 0:
+                pen.axes[(usize)role] = X11Axis(slot = class.number + 1, min = class.min, max = class.max, value = class.value)
+        if pen.axes[axis_pressure].slot != 0 or pen.kind != input.PointerKind.pen:
+            x11_pens[x11_pen_count] = pen
+            x11_pen_count += 1
+    api.free_device_info(devices)
+
+## Ask for the pens' motion and buttons on `window`.
+func x11_pen_select(display: void*, window: u64):
+    let api = x11_xi else return
+    for index in 0..<x11_pen_count:
+        var bits: u8[4] = [(u8)((1 << xi_button_press) | (1 << xi_button_release) | (1 << xi_motion)), 0, 0, 0]
+        var mask = XIEventMask(deviceid = x11_pens[index].id, mask_len = 4, mask = &bits[0])
+        discard(api.select_events(display, window, &mask, 1))
+
+## An XI2 event: a pen's sample is recorded; a hierarchy change finds the
+## pens again and selects them on every window.
+func x11_generic(x: X11Connection, event: XEventBuffer*):
+    let api = x11_xi else return
+    let cookie = (XGenericEventCookie*)(void*)event
+    if cookie.extension != api.opcode:
+        return
+    if api.get_event_data(x.display, cookie) == 0:
+        return
+    defer api.free_event_data(x.display, cookie)
+    if cookie.evtype == xi_hierarchy_changed:
+        x11_pen_scan(api, x.display)
+        for slot in x11_windows:
+            if let state = slot:
+                x11_pen_select(x.display, state.x_window)
+        return
+    if cookie.evtype != xi_motion and cookie.evtype != xi_button_press and cookie.evtype != xi_button_release:
+        return
+    let data = cookie.data else return
+    let device = (XIDeviceEvent*)data
+    for index in 0..<x11_pen_count:
+        if x11_pens[index].id == device.sourceid or x11_pens[index].id == device.deviceid:
+            let values = device.valuators.values else return
+            let bits = device.valuators.mask else return
+            x11_pen_values(&x11_pens[index], u8[](bits, (usize)device.valuators.mask_len), values)
+            x11_pens[index].time = device.time
+            x11_last_pen = index + 1
+            return
+
+## The core pointer event at X time `time` with the pen's axes, when a pen
+## sampled at that moment (the XI2 and core events of one report arrive
+## together, in either order); otherwise it is the mouse's.
+func x11_pen_apply(event: input.Event, time: u64) -> input.Event:
+    if x11_last_pen == 0:
+        return event
+    let pen = x11_pens[x11_last_pen - 1]
+    let apart = time - pen.time if time >= pen.time else pen.time - time
+    if apart > 30:
+        return event
+    return x11_pen_event(event, pen)
+
+# mark: Decoding ===============================================================================
+
+## What an axis labelled `name` is to a pen, or -1: the X server's axis labels
+## (xserver-properties.h) as the wacom and libinput drivers set them.
+func x11_axis_role(name: const u8*) -> i64:
+    if x11_equals(name, "Abs Pressure"):
+        return (i64)axis_pressure
+    if x11_equals(name, "Abs Tilt X"):
+        return (i64)axis_tilt_x
+    if x11_equals(name, "Abs Tilt Y"):
+        return (i64)axis_tilt_y
+    if x11_equals(name, "Abs Wheel") or x11_equals(name, "Abs Throttle"):
+        return (i64)axis_wheel
+    if x11_equals(name, "Abs Rotary Z") or x11_equals(name, "Abs Z"):
+        return (i64)axis_rotation
+    return -1
+
+## A device's kind by its name: the wacom driver names its eraser device
+## "… eraser" (libinput "… Eraser"), and touch screens say so.
+func x11_device_kind(name: const u8*) -> input.PointerKind:
+    if x11_contains(name, "eraser"):
+        return input.PointerKind.eraser
+    if x11_contains(name, "touch") or x11_contains(name, "finger"):
+        return input.PointerKind.touch
+    return input.PointerKind.pen
+
+## Take the values an event carries: one per set bit of `mask`, in order.
+func x11_pen_values(pen: X11Pen*, mask: const u8[], values: const f64*):
+    var taken: usize = 0
+    for bit in 0..<(mask.length * 8):
+        if (mask[bit // 8] & (u8)(1 << (bit % 8))) == 0:
+            continue
+        for which in 0..<pen.axes.length:
+            if pen.axes[which].slot == (i32)bit + 1:
+                pen.axes[which].value = values[taken]
+        taken += 1
+
+## `event` with a pen's axes: pressure over its range, tilt in degrees (the
+## drivers report degrees, -64..63; a wider range is scaled to 60 degrees), the
+## wheel over its range to 0..1, rotation over its range to 0..360.
+func x11_pen_event(event: input.Event, pen: X11Pen) -> input.Event:
+    var result = event
+    result.pointer_kind = pen.kind
+    if pen.axes[axis_pressure].slot != 0:
+        result.pressure = x11_fraction(pen.axes[axis_pressure])
+    elif pen.kind != input.PointerKind.mouse:
+        result.pressure = 1.0
+    result.tilt_x = x11_degrees(pen.axes[axis_tilt_x])
+    result.tilt_y = x11_degrees(pen.axes[axis_tilt_y])
+    if pen.axes[axis_wheel].slot != 0:
+        result.tangential = x11_fraction(pen.axes[axis_wheel])
+    if pen.axes[axis_rotation].slot != 0:
+        result.rotation = x11_fraction(pen.axes[axis_rotation]) * 360.0
+    if pen.kind == input.PointerKind.touch:
+        return result
+    return input.with_pen_angles(result)
+
+func x11_fraction(axis: X11Axis) -> f64:
+    if axis.slot == 0 or not (axis.max > axis.min):
+        return 0.0
+    return math.clamp((axis.value - axis.min) / (axis.max - axis.min), 0.0, 1.0)
+
+func x11_degrees(axis: X11Axis) -> f64:
+    if axis.slot == 0 or not math.is_finite(axis.value):
+        return 0.0
+    if axis.min >= -90.5 and axis.max <= 90.5:
+        return math.clamp(axis.value, -90.0, 90.0)
+    let middle = (axis.max + axis.min) * 0.5
+    let half = (axis.max - axis.min) * 0.5
+    return math.clamp((axis.value - middle) / half * 60.0, -90.0, 90.0) if half > 0.0 else 0.0
+
+## Whether NUL-terminated `name` is `text`.
+func x11_equals(name: const u8*, text: str) -> bool:
+    for index in 0..<text.length:
+        if name[index] != text.bytes[index]:
+            return false
+    return name[text.length] == 0
+
+## Whether NUL-terminated `name` contains lower-case `text`, ignoring case.
+func x11_contains(name: const u8*, text: str) -> bool:
+    var start: usize = 0
+    while start < 256 and name[start] != 0:
+        var index: usize = 0
+        while index < text.length:
+            var byte = name[start + index]
+            if byte >= 'A' and byte <= 'Z':
+                byte += 32
+            if byte != text.bytes[index]:
+                break
+            index += 1
+        if index == text.length:
+            return true
+        start += 1
+    return false
+
+func c_name(text: c.str) -> const u8*:
+    return (const u8*)text
+
+test "X11 axis labels and device names are known":
+    assert(x11_axis_role(c_name("Abs Pressure")) == 0 and x11_axis_role(c_name("Abs Tilt X")) == 1 and x11_axis_role(c_name("Abs Tilt Y")) == 2)
+    assert(x11_axis_role(c_name("Abs Wheel")) == 3 and x11_axis_role(c_name("Abs Rotary Z")) == 4 and x11_axis_role(c_name("Abs X")) == -1)
+    assert(x11_axis_role(c_name("Abs Pressure Extra")) == -1)
+    assert(x11_device_kind(c_name("Wacom Intuos Pro M Pen eraser")) == input.PointerKind.eraser)
+    assert(x11_device_kind(c_name("Wacom One Pen Eraser (0x1234)")) == input.PointerKind.eraser)
+    assert(x11_device_kind(c_name("Wacom Intuos Pro M Pen stylus")) == input.PointerKind.pen)
+    assert(x11_device_kind(c_name("ELAN Touchscreen")) == input.PointerKind.touch)
+
+test "X11 valuators decode to pressure, tilt, wheel and rotation":
+    # The ABI as the 64-bit Xlib and libXi headers lay it out.
+    assert(sizeof(XIDeviceEvent) == 168 and sizeof(XIValuatorClassInfo) == 56 and sizeof(XIDeviceInfo) == 40 and sizeof(XGenericEventCookie) == 56)
+    var pen = X11Pen(id = 12, kind = input.PointerKind.pen)
+    pen.axes[axis_pressure] = X11Axis(slot = 3, min = 0.0, max = 65535.0)
+    pen.axes[axis_tilt_x] = X11Axis(slot = 4, min = -64.0, max = 63.0)
+    pen.axes[axis_tilt_y] = X11Axis(slot = 5, min = -64.0, max = 63.0)
+    pen.axes[axis_wheel] = X11Axis(slot = 6, min = 0.0, max = 1023.0)
+    # Valuators 0, 1 (x, y), 2 (pressure) and 4 (tilt y) changed; 3 kept its last value.
+    pen.axes[axis_tilt_x].value = 20.0
+    var mask: u8[1] = [0x17]
+    var values: f64[4] = [100.0, 200.0, 32767.5, -30.0]
+    x11_pen_values(&pen, mask[..<1], &values[0])
+    let event = x11_pen_event(input.Event(kind = input.EventKind.pointer_moved, x = 3.0), pen)
+    assert(event.pointer_kind == input.PointerKind.pen and event.x == 3.0)
+    assert(event.pressure == 0.5 and event.tilt_x == 20.0 and event.tilt_y == -30.0 and event.tangential == 0.0)
+    assert(event.azimuth > 270.0 and event.altitude < 70.0)
+    # A driver reporting tilt in raw units is scaled to 60 degrees at its end.
+    let raw = X11Axis(slot = 1, min = -1000.0, max = 1000.0, value = 500.0)
+    assert(x11_degrees(raw) == 30.0)
+    pen.axes[axis_wheel].value = 1023.0
+    pen.axes[axis_rotation] = X11Axis(slot = 7, min = 0.0, max = 360.0, value = 90.0)
+    let turned = x11_pen_event(input.Event(kind = input.EventKind.pointer_moved), pen)
+    assert(turned.tangential == 1.0 and turned.rotation == 90.0)
+
+test "a core event takes the pen's axes only from a sample at its moment":
+    x11_pens[0] = X11Pen(id = 9, kind = input.PointerKind.eraser, time = 1000)
+    x11_pen_count = 1
+    x11_last_pen = 1
+    let near = x11_pen_apply(input.Event(kind = input.EventKind.pointer_moved), 1010)
+    assert(near.pointer_kind == input.PointerKind.eraser and near.pressure == 1.0)
+    let later = x11_pen_apply(input.Event(kind = input.EventKind.pointer_moved), 2000)
+    assert(later.pointer_kind == input.PointerKind.mouse and later.pressure == 0.0)
+    x11_pen_count = 0
+    x11_last_pen = 0

@@ -22,8 +22,8 @@ func x11_dispatch(x: X11Connection, event: XEventBuffer*):
         x11_button_event(x, state, (XKeyEvent*)(void*)event)
     elif kind == x_motion_notify:
         let motion = (XKeyEvent*)(void*)event
-        push_event(state, input.Event(kind = input.EventKind.pointer_moved, modifiers = x11_modifiers(motion.state),
-                                      x = (f64)motion.x / x.scale, y = (f64)motion.y / x.scale))
+        push_event(state, x11_pen_apply(input.Event(kind = input.EventKind.pointer_moved, modifiers = x11_modifiers(motion.state),
+                                                    x = (f64)motion.x / x.scale, y = (f64)motion.y / x.scale), motion.time))
     elif kind == x_enter_notify or kind == x_leave_notify:
         let crossing = (XCrossingEvent*)(void*)event
         # Crossings a grab causes (a button held past the edge) are not the pointer leaving.
@@ -136,8 +136,8 @@ func x11_button_event(x: X11Connection, state: State*, event: XKeyEvent*):
         portable = 1
     elif button >= 8:
         portable = button - 5
-    push_event(state, input.Event(kind = input.EventKind.pointer_down if down else input.EventKind.pointer_up, modifiers = held,
-                                  button = portable, x = px, y = py))
+    push_event(state, x11_pen_apply(input.Event(kind = input.EventKind.pointer_down if down else input.EventKind.pointer_up, modifiers = held,
+                                                button = portable, x = px, y = py), event.time))
 
 ## The modifier keys from an event's state bits: Shift, Lock, Control, Mod1 (Alt), Mod4 (Super).
 func x11_modifiers(bits: u32) -> input.Modifiers:

@@ -51,13 +51,17 @@ pub func main(arguments: str[]) -> i32!:
                 for symbol in ['nextEventMatchingMask', 'postEvent:atStart:', 'dateWithTimeIntervalSinceNow:']:
                     assert symbol in assembly, (target, level, symbol)
             if target.endswith('windows'):
-                for symbol in ['MsgWaitForMultipleObjectsEx', 'PostThreadMessageW']:
+                for symbol in ['MsgWaitForMultipleObjectsEx', 'PostThreadMessageW', 'GetPointerPenInfo', 'GetPointerPenInfoHistory']:
                     assert symbol in assembly, (target, level, symbol)
             # Linux loads Xlib at run time and blocks in poll() on the display and a wake pipe
             if target.endswith('linux'):
-                for symbol in ['libX11.so.6', 'XOpenDisplay', 'XCreateSimpleWindow', 'Xutf8LookupString', 'dlopen', 'pipe2', 'poll']:
+                for symbol in ['libX11.so.6', 'XOpenDisplay', 'XCreateSimpleWindow', 'Xutf8LookupString', 'dlopen', 'pipe2', 'poll',
+                               'libXi.so.6', 'XISelectEvents', 'XGetEventData']:
                     assert symbol in assembly, (target, level, symbol)
             else:
                 for symbol in ['libX11.so.6', 'XOpenDisplay']:
                     assert symbol not in assembly, (target, level, symbol)
-            print('PASS text input, cursor, wait and wake target', target, level, flush=True)
+            if target.endswith('macos'):
+                for symbol in ['tabletProximity:', 'tangentialPressure', 'pointingDeviceType']:
+                    assert symbol in assembly, (target, level, symbol)
+            print('PASS text input, cursor, wait, wake and pen target', target, level, flush=True)

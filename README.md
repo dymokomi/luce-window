@@ -1,6 +1,6 @@
 # luce-window
 
-Native desktop windows for Luce: open and size a window, full screen, cursors, text input with the platform input method, keyboard, pointer, touchpad and stylus events, and files dragged in from other applications (`drag_entered`, `drag_moved`, `drag_left`, `drop`; `Window.drop_paths`, `Window.set_drop_accepted`).
+Native desktop windows for Luce: open and size a window, full screen, cursors, text input with the platform input method, keyboard, pointer, touchpad and pen events (pressure, tilt, azimuth and altitude, barrel rotation, the airbrush wheel, eraser versus tip, pen versus mouse versus touch on all three platforms: [docs/PEN.md](docs/PEN.md)), and files dragged in from other applications (`drag_entered`, `drag_moved`, `drag_left`, `drop`; `Window.drop_paths`, `Window.set_drop_accepted`).
 
 ## Modules
 
@@ -26,7 +26,7 @@ def dependency "luce-window" {
 
 ## Platforms
 
-macOS (AppKit), Windows (Win32, OLE drag and drop) and Linux (X11 through Xlib, loaded at run time so no development packages are needed; it runs under Wayland desktops through XWayland; no drag and drop yet).
+macOS (AppKit), Windows (Win32, OLE drag and drop) and Linux (X11 through Xlib, loaded at run time so no development packages are needed; it runs under Wayland desktops through XWayland; no drag and drop yet; pens through XInput 2, with libXi loaded at run time too).
 
 Native libraries it links, by platform (declared in `package.prisma`, linked only when the program reaches code that needs them):
 

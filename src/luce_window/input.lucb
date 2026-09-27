@@ -9,6 +9,8 @@
 #
 #==============================================================================================
 
+import math
+
 # mark: Events and keys =======================================================================
 
 ## Semantic system cursors, mapped by `window.Window` to the host's DPI-aware resources.
@@ -156,6 +158,14 @@ pub struct Modifiers:
     ## Whether caps lock is on.
     pub var caps_lock: bool
 
+## What moved the pointer: a mouse (or touchpad), a pen's tip, a pen's eraser
+## end (or a pen turned over), or a finger on a touch screen.
+pub enum PointerKind as u8:
+    mouse = 0
+    pen = 1
+    eraser = 2
+    touch = 3
+
 ## Whether scroll deltas are in lines or points.
 pub enum ScrollUnit as u8:
     lines = 0
@@ -193,5 +203,123 @@ pub struct Event:
     ## The Unicode scalar, for text_input events.
     pub var codepoint: u32
     ## Stylus pressure for pointer events, 0..1; zero when the device
-    ## reports none, as a mouse does.
+    ## reports none, as a mouse does, and while a pen hovers.
     pub var pressure: f64
+    ## What sent a pointer event; the pen fields below matter for pen and eraser.
+    pub var pointer_kind: PointerKind
+    ## The pen's tilt from upright towards the screen's right (tilt_x) and
+    ## towards the user, down the screen (tilt_y), in degrees -90..90, as
+    ## W3C Pointer Events' tiltX and tiltY. Zero from a pen that reports none.
+    pub var tilt_x: f64
+    pub var tilt_y: f64
+    ## Where the pen leans, in degrees 0..360 clockwise from the screen's right
+    ## (90 leans down the screen), and how upright it stands, 0 (flat) to 90
+    ## (upright): derived from the tilt (`pen_azimuth`, `pen_altitude`). Both
+    ## zero for a mouse or a touch.
+    pub var azimuth: f64
+    pub var altitude: f64
+    ## The pen's barrel rotation (an Art Pen's twist), degrees 0..360 clockwise.
+    pub var rotation: f64
+    ## The airbrush finger wheel, -1..1 with 0 at rest (an airbrush reads 0..1).
+    pub var tangential: f64
+
+# mark: Pen geometry ==========================================================================
+
+## The azimuth of a pen tilted `tilt_x`, `tilt_y` degrees (W3C Pointer Events'
+## conversion): degrees 0..360 clockwise from the screen's right; 0 upright.
+pub func pen_azimuth(tilt_x: f64, tilt_y: f64) -> f64:
+    if tilt_x == 0.0 and tilt_y == 0.0:
+        return 0.0
+    if tilt_x == 0.0:
+        return 90.0 if tilt_y > 0.0 else 270.0
+    if tilt_y == 0.0:
+        return 0.0 if tilt_x > 0.0 else 180.0
+    let x = math.tan(clamp_tilt(tilt_x) * math.pi / 180.0)
+    let y = math.tan(clamp_tilt(tilt_y) * math.pi / 180.0)
+    var degrees = math.atan2(y, x) * 180.0 / math.pi
+    if degrees < 0.0:
+        degrees += 360.0
+    return degrees
+
+## The altitude of a pen tilted `tilt_x`, `tilt_y` degrees: 90 upright, 0 flat.
+pub func pen_altitude(tilt_x: f64, tilt_y: f64) -> f64:
+    let ax = math.abs(clamp_tilt(tilt_x))
+    let ay = math.abs(clamp_tilt(tilt_y))
+    if ax >= 90.0 or ay >= 90.0:
+        return 0.0
+    if ax == 0.0:
+        return 90.0 - ay
+    if ay == 0.0:
+        return 90.0 - ax
+    let x = math.tan(ax * math.pi / 180.0)
+    let y = math.tan(ay * math.pi / 180.0)
+    return math.atan(1.0 / math.sqrt(x * x + y * y)) * 180.0 / math.pi
+
+## The tilt (tilt_x, tilt_y degrees) of a pen at `azimuth` and `altitude`
+## degrees: the inverse of `pen_azimuth` and `pen_altitude`, for hosts that
+## report the pen's angles rather than its tilt.
+pub func pen_tilt(azimuth: f64, altitude: f64) -> (f64, f64):
+    if altitude >= 90.0:
+        return (0.0, 0.0)
+    if altitude <= 0.0:
+        # Flat: each axis tilts fully towards the azimuth's side, or not at all.
+        let radians = azimuth * math.pi / 180.0
+        let c = math.cos(radians)
+        let s = math.sin(radians)
+        return (90.0 * sign_or_zero(c), 90.0 * sign_or_zero(s))
+    let radians = azimuth * math.pi / 180.0
+    let reach = 1.0 / math.tan(altitude * math.pi / 180.0)
+    let x = math.atan(math.cos(radians) * reach) * 180.0 / math.pi
+    let y = math.atan(math.sin(radians) * reach) * 180.0 / math.pi
+    return (x, y)
+
+## Fill in an event's azimuth and altitude from its tilt.
+pub func with_pen_angles(event: Event) -> Event:
+    var result = event
+    result.azimuth = pen_azimuth(event.tilt_x, event.tilt_y)
+    result.altitude = pen_altitude(event.tilt_x, event.tilt_y)
+    return result
+
+func clamp_tilt(degrees: f64) -> f64:
+    return math.clamp(degrees, -90.0, 90.0) if math.is_finite(degrees) else 0.0
+
+func sign_or_zero(value: f64) -> f64:
+    if math.abs(value) < 1e-9:
+        return 0.0
+    return 1.0 if value > 0.0 else -1.0
+
+func near(a: f64, b: f64) -> bool:
+    return math.abs(a - b) < 1e-6
+
+test "an upright pen has no azimuth and stands at 90 degrees":
+    assert(pen_azimuth(0.0, 0.0) == 0.0 and pen_altitude(0.0, 0.0) == 90.0)
+
+test "a pen tilted along one axis leans that way by that much":
+    assert(pen_azimuth(30.0, 0.0) == 0.0 and pen_altitude(30.0, 0.0) == 60.0)
+    assert(pen_azimuth(-30.0, 0.0) == 180.0 and pen_altitude(-30.0, 0.0) == 60.0)
+    assert(pen_azimuth(0.0, 45.0) == 90.0 and pen_altitude(0.0, 45.0) == 45.0)
+    assert(pen_azimuth(0.0, -45.0) == 270.0)
+
+test "an equal tilt on both axes leans on the diagonal, lower than either":
+    assert(near(pen_azimuth(40.0, 40.0), 45.0))
+    assert(near(pen_azimuth(-40.0, 40.0), 135.0))
+    assert(near(pen_azimuth(-40.0, -40.0), 225.0))
+    assert(near(pen_azimuth(40.0, -40.0), 315.0))
+    let tangent = math.tan(40.0 * math.pi / 180.0)
+    assert(near(pen_altitude(40.0, 40.0), math.atan(1.0 / (tangent * math.sqrt(2.0))) * 180.0 / math.pi))
+    assert(pen_altitude(40.0, 40.0) < 50.0)
+
+test "tilt and angles convert both ways":
+    for tilt in [(10.0, 20.0), (-35.0, 5.0), (60.0, -60.0), (-1.0, -70.0), (0.0, 30.0)]:
+        let azimuth = pen_azimuth(tilt.0, tilt.1)
+        let altitude = pen_altitude(tilt.0, tilt.1)
+        let back = pen_tilt(azimuth, altitude)
+        assert(math.abs(back.0 - tilt.0) < 1e-6 and math.abs(back.1 - tilt.1) < 1e-6)
+    let upright = pen_tilt(123.0, 90.0)
+    assert(upright.0 == 0.0 and upright.1 == 0.0)
+
+test "a tilt past the range or not a number reads as the range's end or upright":
+    assert(pen_altitude(120.0, 0.0) == 0.0)
+    assert(pen_azimuth(math.nan, 0.0) == 0.0 or pen_azimuth(math.nan, 0.0) == 180.0)
+    let event = with_pen_angles(Event(kind = EventKind.pointer_moved, pointer_kind = PointerKind.pen, tilt_x = 0.0, tilt_y = 30.0))
+    assert(event.azimuth == 90.0 and event.altitude == 60.0)

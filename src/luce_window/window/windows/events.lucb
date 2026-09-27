@@ -138,6 +138,9 @@ func win_callback(native: void*, message: u32, word: usize, value: isize) -> isi
         state.pointer_tracking = false
         push_event(state, input.Event(kind = input.EventKind.pointer_left))
         return 0
+    elif win_pointer_message(message):
+        if win_pointer(state, native, message, word):
+            return 0
     elif message >= 512 and message <= 526:
         var point = WinPoint(x = signed_half(value), y = signed_half(value >> 16))
         let scrolling = message == 522 or message == 526
@@ -146,6 +149,8 @@ func win_callback(native: void*, message: u32, word: usize, value: isize) -> isi
         let dpi = GetDpiForWindow(native)
         let scale = (f64)dpi / 96.0 if dpi > 0 else 1.0
         var event = input.Event(kind = input.EventKind.pointer_moved, modifiers = win_modifiers(), x = (f64)point.x / scale, y = (f64)point.y / scale)
+        # A touch's (or a pen without Windows Ink handling) promoted mouse message.
+        event.pointer_kind = win_promoted_kind((usize)GetMessageExtraInfo())
         if message == 512:
             push_merged_moves(state, native, point, (word & 19) != 0, scale, event.modifiers)
         if message == 512 and not state.pointer_tracking:
