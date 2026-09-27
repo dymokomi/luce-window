@@ -104,6 +104,11 @@ in later is found on `XI_HierarchyChanged`.
 The wacom driver may carry an Art Pen's rotation on "Abs Wheel"; then it reads
 as the tangential value. `xinput list <device>` shows a tablet's labels.
 
+Under XWayland the tablet appears as `xwayland-tablet stylus:N`,
+`xwayland-tablet eraser:N` and a pad, with the Wayland tablet protocol's
+ranges (pressure 0..65535, tilt about ±64): every axis is normalized by the
+minimum and maximum `XIQueryDevice` reports, never a fixed range.
+
 Wayland is not supported natively: under XWayland, the compositor's tablet
 protocol reaches X11 applications as XI2 devices, so the same code applies
 where the compositor exposes them.

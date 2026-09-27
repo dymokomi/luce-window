@@ -40,6 +40,8 @@ def desktop_available():
 
 def main():
     mac = platform.system() == 'Darwin' and platform.machine() == 'arm64'
+    machine = platform.machine().lower()
+    backend = (platform.system() == 'Linux' and machine in {'x86_64', 'amd64', 'aarch64', 'arm64'}) or (platform.system() == 'Windows' and machine in {'amd64', 'x86_64'})
     policy = os.environ.get('LUCE_TEST_WINDOW', 'optional')
     if policy not in {'required', 'optional', 'off'}:
         raise ValueError('LUCE_TEST_WINDOW must be required, optional, or off')
@@ -59,9 +61,12 @@ def main():
         modes += [('c', ['--backend=c']), ('c-release', ['--backend=c', '--release'])]
         for name, flags in modes:
             binary = work / name
-            entry = work / ('probe.lucb' if mac else 'unsupported.lucb')
+            # macOS runs the full probe; Linux and Windows have a backend
+            # (supported.lucb); any other host must refuse (unsupported.lucb).
+            other = 'supported' if backend else 'unsupported'
+            entry = work / ('probe.lucb' if mac else other + '.lucb')
             run([str(COMPILER), 'build', str(entry), *flags, '-o', str(binary)])
-            expected = 'ok window contracts without WindowServer' if mac else 'ok unsupported window target'
+            expected = 'ok window contracts without WindowServer' if mac else f'ok {other} window target'
             run([str(binary)], expected=expected)
             if gui:
                 run([str(binary), 'gui'], expected='ok native window lifecycle, ABI, input, isolation, and overflow')

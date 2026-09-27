@@ -378,6 +378,22 @@ test "X11 valuators decode to pressure, tilt, wheel and rotation":
     let turned = x11_pen_event(input.Event(kind = input.EventKind.pointer_moved), pen)
     assert(turned.tangential == 1.0 and turned.rotation == 90.0)
 
+test "XWayland's tablet devices and ranges decode as the drivers' do":
+    # Under XWayland the tablet is "xwayland-tablet stylus:N" and "… eraser:N",
+    # pressure 0..65535 and tilt about ±64, normalized by what XIQueryDevice says.
+    assert(x11_device_kind(c_name("xwayland-tablet stylus:15")) == input.PointerKind.pen)
+    assert(x11_device_kind(c_name("xwayland-tablet eraser:15")) == input.PointerKind.eraser)
+    var pen = X11Pen(id = 15, kind = input.PointerKind.pen)
+    pen.axes[axis_pressure] = X11Axis(slot = 3, min = 0.0, max = 65535.0, value = 49151.25)
+    pen.axes[axis_tilt_x] = X11Axis(slot = 4, min = -64.0, max = 64.0, value = -64.0)
+    pen.axes[axis_tilt_y] = X11Axis(slot = 5, min = -64.0, max = 64.0, value = 32.0)
+    let event = x11_pen_event(input.Event(kind = input.EventKind.pointer_moved), pen)
+    assert(event.pressure == 0.75 and event.tilt_x == -64.0 and event.tilt_y == 32.0)
+    assert(event.azimuth > 90.0 and event.azimuth < 180.0 and event.altitude < 30.0)
+    # A pressure range that does not start at zero still spans 0..1.
+    pen.axes[axis_pressure] = X11Axis(slot = 3, min = 1024.0, max = 2048.0, value = 1536.0)
+    assert(x11_pen_event(input.Event(kind = input.EventKind.pointer_moved), pen).pressure == 0.5)
+
 test "a core event takes the pen's axes only from a sample at its moment":
     x11_pens[0] = X11Pen(id = 9, kind = input.PointerKind.eraser, time = 1000)
     x11_pen_count = 1
