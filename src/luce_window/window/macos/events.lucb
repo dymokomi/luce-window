@@ -171,6 +171,13 @@ let key_positions: u16[128] = [
 ]
 
 func physical_key(code: u16) -> input.Key:
+    # HIToolbox kVK_ANSI_KeypadEnter is an Enter action, like Linux/Windows.
+    if code == 76:
+        return input.Key.enter
     if code >= key_positions.length:
         return input.Key.unknown
     return (input.Key)key_positions[code]
+
+test "both Return and keypad Enter submit controls":
+    assert(physical_key(36) == input.Key.enter)
+    assert(physical_key(76) == input.Key.enter)
