@@ -12,9 +12,8 @@ with tempfile.TemporaryDirectory(prefix='luce-window-targets-') as directory:
     work = Path(directory)
     source = work / 'probe.lucb'
     # The probe is a package of its own that depends on this one.
-    (work / 'package.prisma').write_text('#prisma 4.0\ndef package "window-targets-probe" {\n    str owner = "dymokomi"\n    str version = "0.0.0"\n    str kind = "tool"\n    str language = "luce-base"\n    str entry = "probe.lucb"\n    def dependency "luce-window" {\n        str owner = "dymokomi"\n        str version = "^0.1.0"\n        str path = "' + str(ROOT) + '"\n    }\n}\n')
-    source.write_text('''import window
-import input
+    (work / 'package.prisma').write_text('#prisma 4.0\ndef package "window-targets-probe" {\n    str owner = "dymokomi"\n    str version = "0.0.0"\n    str kind = "tool"\n    str language = "luce-base"\n    str entry = "probe.lucb"\n    def dependency "luce-window" {\n        str owner = "dymokomi"\n        str path = "' + str(ROOT) + '"\n    }\n}\n')
+    source.write_text('''from luce_window import window, input
 import platform
 pub func main(arguments: str[]) -> i32!:
     var host = try window.Window.open(window.Options(title = "Input target contract"))

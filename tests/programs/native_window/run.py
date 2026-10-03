@@ -75,7 +75,7 @@ def main():
             print(f'ok native_window {name}' + (' (GUI)' if gui else ' (contracts)'), flush=True)
         # A portable input-only program must not acquire AppKit linkage.
         (work / 'package.prisma').write_text('#prisma 4.0\ndef package "input_only" {\n' + dependency + '}\n')
-        (work / 'input_only.lucb').write_text('import input\npub func main(arguments: str[]) -> i32:\n    discard(arguments)\n    assert((u16)input.Key.a == 4)\n    return 0\n')
+        (work / 'input_only.lucb').write_text('from luce_window import input\npub func main(arguments: str[]) -> i32:\n    discard(arguments)\n    assert((u16)input.Key.a == 4)\n    return 0\n')
         binary = work / 'input-only'
         run([str(COMPILER), 'build', str(work / 'input_only.lucb'), '-o', str(binary)])
         run([str(binary)])
