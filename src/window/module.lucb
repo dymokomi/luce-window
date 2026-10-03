@@ -9,11 +9,11 @@
 #==============================================================================================
 
 import c
-import luce_window.input as input
-import math
+import input
+import luce_std.math
 import memory
 import platform
-import utf8
+import luce_std.utf8
 import thread
 import windows_text
 # mark: Errors, options and the window ========================================================

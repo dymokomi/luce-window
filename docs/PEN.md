@@ -116,5 +116,5 @@ where the compositor exposes them.
 ## Testing
 
 The decoding functions take native values and are tested with synthetic ones
-on every host (`luce-base test src/luce_window/window`). Real pens are checked
+on every host (`luce-base test src/window`). Real pens are checked
 by hand on each platform.

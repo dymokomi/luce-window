@@ -1,4 +1,4 @@
-import window
+import luce_window.window
 
 ## A host with a window backend but no macOS test helpers (Linux, Windows):
 ## the API reports support, and opening a window either works (a display is

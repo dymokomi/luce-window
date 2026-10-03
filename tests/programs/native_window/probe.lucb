@@ -1,6 +1,6 @@
 import c
-import input
-import window
+import luce_window.input
+import luce_window.window
 import native
 import platform
 import thread
