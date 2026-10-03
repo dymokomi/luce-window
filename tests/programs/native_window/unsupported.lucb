@@ -1,4 +1,4 @@
-import luce_window.window
+from luce_window import window
 
 ## Unsupported targets can import the API and receive its ordinary error without
 ## linking any native window-system library. No macOS test helpers are imported.

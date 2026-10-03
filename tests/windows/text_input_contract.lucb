@@ -1,7 +1,7 @@
 ## Hidden native windows exercise committed text without GPU hardware or focus.
-import luce_window.input
+from luce_window import input
 import thread
-import luce_window.window
+from luce_window import window
 
 extern func PostMessageW(window: void*, message: u32, word: usize, value: isize) -> i32
 extern func SendMessageW(window: void*, message: u32, word: usize, value: isize) -> isize

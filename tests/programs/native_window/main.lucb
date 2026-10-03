@@ -1,5 +1,4 @@
-import luce_window.input
-import luce_window.window
+from luce_window import input, window
 import thread
 
 ## This demonstration deliberately draws nothing: it exercises the native window

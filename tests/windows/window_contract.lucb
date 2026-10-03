@@ -1,5 +1,4 @@
-import luce_window.window
-import luce_window.input
+from luce_window import window, input
 import thread
 
 extern func PostMessageW(window: void*, message: u32, word: usize, value: isize) -> i32
