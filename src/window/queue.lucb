@@ -132,8 +132,8 @@ func clear_drop_paths(state: State*):
 func add_drop_path(state: State*, path: str):
     if state.drop_count >= state.drop_paths.length or path.length == 0:
         return
-    let copy = alloc u8[path.length + 1] in memory.heap catch failure:
-        discard(failure)
+    let copy = new u8[path.length + 1] --- in memory.heap catch failure:
+        _ = failure
         return
     for index in 0..<path.length:
         copy[index] = path.bytes[index]

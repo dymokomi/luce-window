@@ -22,7 +22,7 @@ pub func main(arguments: str[]) -> i32!:
         assert(GetCursor() == LoadCursorW(none, (u16*)cursors[index]))
     try host.set_cursor(input.Cursor.arrow)
     while let event = try host.poll():
-        discard(event)
+        _ = event
     try host.set_text_input(true)
     assert(PostMessageW(handle, 258, 233, 1) != 0)
     assert(PostMessageW(handle, 258, 0xD83D, 1) != 0)

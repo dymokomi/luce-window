@@ -27,7 +27,7 @@ func win_cursor(cursor: input.Cursor) -> void*?!:
         .grabbing: resource = 32646
         .not_allowed: resource = 32648
         .crosshair: resource = 32515
-        _: discard(())
+        _: _ = ()
     return LoadCursorW(none, (u16*)resource) else error(failed, "Windows could not load a system cursor")
 
 func win_set_cursor(state: State*, cursor: input.Cursor) -> !:
@@ -38,9 +38,9 @@ func win_set_cursor(state: State*, cursor: input.Cursor) -> !:
     let native = required(state.native)
     var point: WinPoint
     if GetCapture() == native:
-        discard(SetCursor(state.native_cursor))
+        _ = SetCursor(state.native_cursor)
     elif GetCursorPos(&point) != 0 and WindowFromPoint(point) == native:
-        discard(ScreenToClient(native, &point))
+        _ = ScreenToClient(native, &point)
         var bounds: WinRect
         if GetClientRect(native, &bounds) != 0 and point.x >= 0 and point.y >= 0 and point.x < bounds.right and point.y < bounds.bottom:
-            discard(SetCursor(state.native_cursor))
+            _ = SetCursor(state.native_cursor)

@@ -107,7 +107,7 @@ func mac_text_rect(object: void*, selector: void*, range: LuceWindowMacRange, ac
 
 func mac_text_command(object: void*, selector: void*, command: void*):
     # Navigation and editing commands are delivered through physical key events.
-    discard(command)
+    _ = command
 
 ## Called only under the facade's compile-time macOS branch. Keeping the runtime
 ## enabled check inside that branch excludes Objective-C from other target links.

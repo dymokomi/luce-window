@@ -49,7 +49,7 @@ var win_drop_table_ready: bool
 
 ## Make `state`'s window an OLE drop target for files.
 func win_register_drops(state: State*) -> !:
-    discard(OleInitialize(none))
+    _ = OleInitialize(none)
     if not win_drop_table_ready:
         win_drop_table.slots = [(void*)win_drop_query, (void*)win_drop_add_ref, (void*)win_drop_release, (void*)win_drag_enter,
                                 (void*)win_drag_over, (void*)win_drag_leave, (void*)win_drag_drop]
@@ -64,7 +64,7 @@ func win_register_drops(state: State*) -> !:
 func win_revoke_drops(state: State*):
     let target = state.drop_target else return
     if let native = state.native:
-        discard(RevokeDragDrop(native))
+        _ = RevokeDragDrop(native)
     free((WinDropTarget*)target) in memory.heap
     state.drop_target = none
 
@@ -99,7 +99,7 @@ func win_drop_release(this: WinDropTarget*) -> u32:
 # mark: IDropTarget ============================================================================
 
 func win_drag_enter(this: WinDropTarget*, data: void*, keys: u32, point: u64, effect: u32*) -> i32:
-    discard(keys)
+    _ = keys
     let state = this.state
     win_read_drop_paths(state, data)
     state.drop_accepted = state.drop_count > 0
@@ -108,7 +108,7 @@ func win_drag_enter(this: WinDropTarget*, data: void*, keys: u32, point: u64, ef
     return 0
 
 func win_drag_over(this: WinDropTarget*, keys: u32, point: u64, effect: u32*) -> i32:
-    discard(keys)
+    _ = keys
     let state = this.state
     win_push_drag(state, point, input.EventKind.drag_moved)
     *effect = 1 if state.drop_accepted and state.drop_count > 0 else 0
@@ -119,8 +119,8 @@ func win_drag_leave(this: WinDropTarget*) -> i32:
     return 0
 
 func win_drag_drop(this: WinDropTarget*, data: void*, keys: u32, point: u64, effect: u32*) -> i32:
-    discard(data)
-    discard(keys)
+    _ = data
+    _ = keys
     let state = this.state
     if state.drop_accepted and state.drop_count > 0:
         win_push_drag(state, point, input.EventKind.drop)
@@ -134,7 +134,7 @@ func win_drag_drop(this: WinDropTarget*, data: void*, keys: u32, point: u64, eff
 func win_push_drag(state: State*, point: u64, kind: input.EventKind):
     let native = state.native else return
     var client = WinPoint(x = (i32)(u32)(point & 0xFFFFFFFF), y = (i32)(u32)(point >> 32))
-    discard(ScreenToClient(native, &client))
+    _ = ScreenToClient(native, &client)
     let dpi = GetDpiForWindow(native)
     let scale = (f64)dpi / 96.0 if dpi > 0 else 1.0
     push_event(state, input.Event(kind = kind, x = (f64)client.x / scale, y = (f64)client.y / scale))
@@ -156,13 +156,13 @@ func win_read_drop_paths(state: State*, data: void*):
         let length = DragQueryFileW(drop, index, none, 0)
         if length == 0:
             continue
-        let wide = alloc u16[(usize)length + 1] in memory.heap catch failure:
-            discard(failure)
+        let wide = new u16[(usize)length + 1] --- in memory.heap catch failure:
+            _ = failure
             continue
         defer free(wide) in memory.heap
-        discard(DragQueryFileW(drop, index, wide.data, length + 1))
+        _ = DragQueryFileW(drop, index, wide.data, length + 1)
         let path = windows_text.narrow(wide[..<length], failed) catch failure:
-            discard(failure)
+            _ = failure
             continue
         add_drop_path(state, path)
         free(u8[]((u8*)path.bytes.data, path.length + 1))

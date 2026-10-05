@@ -28,12 +28,12 @@ func x11_set_cursor(state: State*, cursor: input.Cursor) -> !:
     let created = try x11_blank_cursor(&x, state) if cursor == input.Cursor.hidden else x.api.create_font_cursor(x.display, x11_cursor_shape(cursor))
     if created == 0:
         error(failed, "X11 could not create a system cursor")
-    discard(x.api.define_cursor(x.display, state.x_window, created))
+    _ = x.api.define_cursor(x.display, state.x_window, created)
     if state.x_cursor != 0:
-        discard(x.api.free_cursor(x.display, state.x_cursor))
+        _ = x.api.free_cursor(x.display, state.x_cursor)
     state.x_cursor = created
     state.cursor = cursor
-    discard(x.api.flush(x.display))
+    _ = x.api.flush(x.display)
 
 ## A cursor with nothing to show: a one-pixel bitmap that masks itself out.
 func x11_blank_cursor(x: const X11Connection*, state: State*) -> u64!:
@@ -41,7 +41,7 @@ func x11_blank_cursor(x: const X11Connection*, state: State*) -> u64!:
     let pixmap = x.api.create_bitmap_from_data(x.display, state.x_window, &bits[0], 1, 1)
     if pixmap == 0:
         error(failed, "X11 could not make an empty cursor")
-    defer discard(x.api.free_pixmap(x.display, pixmap))
+    defer _ = x.api.free_pixmap(x.display, pixmap)
     # XColor: pixel, red, green, blue, flags, pad — zero is black, unseen here.
     var color: u8[16]
     for index in 0..<(usize)16:

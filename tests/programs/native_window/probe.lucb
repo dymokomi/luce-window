@@ -7,10 +7,10 @@ import time
 
 ## Wake the UI loop from another thread after a short delay (spec §8 acceptance).
 func waker(context: void*?):
-    discard(context)
+    _ = context
     thread.sleep(50)
     window.wake() catch failure:
-        discard(failure)
+        _ = failure
         trap("window.wake() from a worker thread failed")
 
 func wrong_thread(context: void*?):
@@ -26,7 +26,7 @@ func wrong_thread(context: void*?):
 func flush(surface: window.Window*) -> !:
     var count: usize = 0
     while let event = try surface.poll():
-        discard(event)
+        _ = event
         count += 1
         assert(count < 4096)
 
@@ -68,10 +68,10 @@ pub func main(arguments: str[]) -> i32!:
         assert(rejected)
         var zero: window.Window
         rejected = false
-        discard(zero.poll() catch failure:
+        _ = zero.poll() catch failure:
             assert(failure.code == window.closed)
             rejected = true
-            recover none)
+            recover none
         assert(rejected)
         zero.destroy()
         rejected = false
@@ -83,10 +83,10 @@ pub func main(arguments: str[]) -> i32!:
         # is rejected exactly like poll().
         try window.wake()
         rejected = false
-        discard(zero.wait(0) catch failure:
+        _ = zero.wait(0) catch failure:
             assert(failure.code == window.closed)
             rejected = true
-            recover none)
+            recover none
         assert(rejected)
         if arguments.length < 2 or arguments[1] != "gui":
             print("ok window contracts without WindowServer")
@@ -104,14 +104,14 @@ pub func main(arguments: str[]) -> i32!:
         # ~50 ms then wakes; wait's one-hour budget must not be what ends it.
         var waker_thread = try thread.spawn(waker, none)
         let started = time.now()
-        discard(try first.wait(3600000000000))
+        _ = try first.wait(3600000000000)
         try waker_thread.join()
         assert(time.since(started) < 5000000000)
         try flush(&first)
         native.focus_notification(native.find("Luce test A"), true)
-        discard(try expect(&first, input.EventKind.focus_gained))
+        _ = try expect(&first, input.EventKind.focus_gained)
         native.focus_notification(native.find("Luce test A"), false)
-        discard(try expect(&first, input.EventKind.focus_lost))
+        _ = try expect(&first, input.EventKind.focus_lost)
         let initial = try first.size()
         assert(initial.width == 320.0 and initial.height == 240.0)
         assert(initial.scale >= 1.0 and initial.pixel_width == initial.width * initial.scale)
@@ -119,7 +119,7 @@ pub func main(arguments: str[]) -> i32!:
         try flush(&first)
         try flush(&second)
         try first.resize(512, 384)
-        discard(try expect(&first, input.EventKind.resized))
+        _ = try expect(&first, input.EventKind.resized)
         let resized = try first.size()
         assert(resized.width == 512.0 and resized.height == 384.0)
         assert((try second.size()).width == 400.0)
@@ -161,7 +161,7 @@ pub func main(arguments: str[]) -> i32!:
             assert((try expect(&first, input.EventKind.text_input)).codepoint == (u32)scalar)
         assert((try first.poll()) == none)
         native.typed_key(a, "a")
-        discard(try expect(&first, input.EventKind.key_down))
+        _ = try expect(&first, input.EventKind.key_down)
         assert((try expect(&first, input.EventKind.text_input)).codepoint == 97)
         native.composition(a, "e")
         assert(native.composing(a))
@@ -177,12 +177,12 @@ pub func main(arguments: str[]) -> i32!:
         let click = try expect(&first, input.EventKind.pointer_down)
         assert(click.button == 0 and click.x == 12.0 and click.y == 364.0)
         native.mouse(a, 2, 12.0, 20.0)
-        discard(try expect(&first, input.EventKind.pointer_up))
+        _ = try expect(&first, input.EventKind.pointer_up)
         native.pointer_boundary(a, true)
         let entered = try expect(&first, input.EventKind.pointer_entered)
         assert(entered.x == 12.0 and entered.y == 364.0)
         native.pointer_boundary(a, false)
-        discard(try expect(&first, input.EventKind.pointer_left))
+        _ = try expect(&first, input.EventKind.pointer_left)
         native.scroll(a, true)
         let precise = try expect(&first, input.EventKind.scroll)
         assert(precise.scroll_unit == input.ScrollUnit.points and precise.scroll_x == -2.0 and precise.scroll_y == 3.0)
@@ -206,7 +206,7 @@ pub func main(arguments: str[]) -> i32!:
         first.destroy()
         first.destroy()
         native.key(b, 10, 0, direct = true)
-        discard(try expect(&second, input.EventKind.key_down))
+        _ = try expect(&second, input.EventKind.key_down)
         try second.request_close()
         assert((try expect(&second, input.EventKind.close_requested)).kind == input.EventKind.close_requested)
         second.destroy()

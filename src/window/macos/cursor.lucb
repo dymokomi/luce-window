@@ -32,7 +32,7 @@ func mac_cursor(cursor: input.Cursor) -> void*!:
         .grabbing: name = "closedHandCursor"
         .not_allowed: name = "operationNotAllowedCursor"
         .crosshair: name = "crosshairCursor"
-        _: discard(())
+        _: _ = ()
     return msg_ptr(try native_class("NSCursor"), sel(name)) else error(failed, "AppKit could not load a system cursor")
 
 func mac_set_cursor(state: State*, cursor: input.Cursor) -> !:

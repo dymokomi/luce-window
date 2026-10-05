@@ -42,7 +42,7 @@ func drop_operation(state: State*) -> u64:
     return 1 if state.drop_accepted and state.drop_count > 0 else 0
 
 func drag_entered_callback(object: void*, selector: void*, sender: void*) -> u64:
-    discard(selector)
+    _ = selector
     let state = get_state(object) else return 0
     read_drop_paths(state, sender)
     # Until the application answers, a drag carrying files is taken.
@@ -51,25 +51,25 @@ func drag_entered_callback(object: void*, selector: void*, sender: void*) -> u64
     return drop_operation(state)
 
 func drag_updated_callback(object: void*, selector: void*, sender: void*) -> u64:
-    discard(selector)
+    _ = selector
     let state = get_state(object) else return 0
     push_drag(state, object, sender, input.EventKind.drag_moved)
     return drop_operation(state)
 
 func drag_exited_callback(object: void*, selector: void*, sender: void*):
-    discard(selector)
-    discard(sender)
+    _ = selector
+    _ = sender
     let state = get_state(object) else return
     push_event(state, input.Event(kind = input.EventKind.drag_left))
 
 func drag_prepare_callback(object: void*, selector: void*, sender: void*) -> bool:
-    discard(selector)
-    discard(sender)
+    _ = selector
+    _ = sender
     let state = get_state(object) else return false
     return drop_operation(state) != 0
 
 func drag_perform_callback(object: void*, selector: void*, sender: void*) -> bool:
-    discard(selector)
+    _ = selector
     let state = get_state(object) else return false
     if drop_operation(state) == 0:
         return false

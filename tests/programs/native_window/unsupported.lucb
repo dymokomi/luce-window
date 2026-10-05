@@ -3,7 +3,7 @@ from luce_window import window
 ## Unsupported targets can import the API and receive its ordinary error without
 ## linking any native window-system library. No macOS test helpers are imported.
 pub func main(arguments: str[]) -> i32!:
-    discard(arguments)
+    _ = arguments
     assert(not window.supported())
     var rejected = false
     var surface = window.Window.open() catch failure:

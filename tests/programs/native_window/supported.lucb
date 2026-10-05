@@ -4,7 +4,7 @@ from luce_window import window
 ## the API reports support, and opening a window either works (a display is
 ## there) or is refused as unsupported (none is, as on a headless runner).
 pub func main(arguments: str[]) -> i32!:
-    discard(arguments)
+    _ = arguments
     assert(window.supported())
     var surface = window.Window.open(window.Options(title = "Supported target contract")) catch failure:
         assert(failure.code == window.unsupported)

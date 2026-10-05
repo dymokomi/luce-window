@@ -88,8 +88,8 @@ var win_ui_thread: @u32
 func win_setup() -> !:
     if win_class_atom != 0:
         return
-    discard(SetProcessDpiAwarenessContext((void*)(isize)-4))
-    var info = WinClass(size = (u32)sizeof(WinClass), procedure = win_callback,
+    _ = SetProcessDpiAwarenessContext((void*)(isize)-4)
+    var info = WinClass(size = (u32)memory.size_of(WinClass), procedure = win_callback,
                         instance = GetModuleHandleW(none), cursor = LoadCursorW(none, (u16*)32512),
                         brush = (void*)6, name = &win_class_name[0])
     # Through a local of its type: the class atom is a 16-bit C result.
@@ -104,7 +104,7 @@ func win_open(options: Options) -> State*!:
     let state = try new State() in memory.heap
     errdefer win_destroy(state)
     state.native_cursor = try win_cursor(input.Cursor.arrow)
-    let title = try alloc u16[options.title.length + 1]
+    let title = try new u16[options.title.length + 1] ---
     defer free(title)
     var count: i32 = 0
     if options.title.length > 0:
@@ -126,7 +126,7 @@ func win_open(options: Options) -> State*!:
 func win_size(state: State*) -> Size:
     let native = required(state.native)
     var rect: WinRect
-    discard(GetClientRect(native, &rect))
+    _ = GetClientRect(native, &rect)
     let dpi = GetDpiForWindow(native)
     let scale = (f64)dpi / 96.0 if dpi > 0 else 1.0
     let width = (f64)(rect.right - rect.left)
@@ -152,7 +152,7 @@ func win_set_fullscreen(state: State*, enabled: bool) -> !:
         if GetWindowRect(native, &placed) == 0:
             error(failed, "the native window placement could not be read")
         let monitor = MonitorFromWindow(native, 2) else error(failed, "no display is available for fullscreen")
-        var info = WinMonitor(size = (u32)sizeof(WinMonitor))
+        var info = WinMonitor(size = (u32)memory.size_of(WinMonitor))
         if GetMonitorInfoW(monitor, &info) == 0:
             error(failed, "the native monitor could not be queried")
         state.saved_x = (f64)placed.left
@@ -160,14 +160,14 @@ func win_set_fullscreen(state: State*, enabled: bool) -> !:
         state.saved_width = (f64)(placed.right - placed.left)
         state.saved_height = (f64)(placed.bottom - placed.top)
         state.saved_style = (u64)GetWindowLongPtrW(native, -16)
-        discard(SetWindowLongPtrW(native, -16, (isize)(u64)(0x80000000 | 0x10000000)))
+        _ = SetWindowLongPtrW(native, -16, (isize)(u64)(0x80000000 | 0x10000000))
         let area = info.monitor
         if SetWindowPos(native, none, area.left, area.top, area.right - area.left, area.bottom - area.top, 32) == 0:
-            discard(SetWindowLongPtrW(native, -16, (isize)state.saved_style))
+            _ = SetWindowLongPtrW(native, -16, (isize)state.saved_style)
             error(failed, "the native window could not enter fullscreen")
         state.fullscreen = true
     else:
-        discard(SetWindowLongPtrW(native, -16, (isize)state.saved_style))
+        _ = SetWindowLongPtrW(native, -16, (isize)state.saved_style)
         if SetWindowPos(native, none, (i32)state.saved_x, (i32)state.saved_y, (i32)state.saved_width, (i32)state.saved_height, 32) == 0:
             error(failed, "the native window could not leave fullscreen")
         state.fullscreen = false
@@ -178,8 +178,8 @@ func win_pump(waiting: State*):
     var message: WinMessage
     var count: usize = 0
     while count < 256 and PeekMessageW(&message, none, 0, 0, 1) != 0:
-        discard(TranslateMessage(&message))
-        discard(DispatchMessageW(&message))
+        _ = TranslateMessage(&message)
+        _ = DispatchMessageW(&message)
         count += 1
         if waiting.count > 0 or waiting.close_requested or waiting.overflowed:
             break
@@ -190,7 +190,7 @@ func win_wait(waiting: State*, timeout_ns: u64):
     let ms64 = (timeout_ns + 999999) // 1000000
     let milliseconds: u32 = 0xFFFFFFFF if ms64 >= 0xFFFFFFFF else (u32)ms64
     # QS_ALLINPUT | MWMO_INPUTAVAILABLE: wake on any queued message, including one already present.
-    discard(MsgWaitForMultipleObjectsEx(0, none, milliseconds, 0x04FF, 0x0004))
+    _ = MsgWaitForMultipleObjectsEx(0, none, milliseconds, 0x04FF, 0x0004)
     win_pump(waiting)
 
 ## Post WM_NULL to the UI thread so a blocked win_wait() returns. PostThreadMessageW is
@@ -200,14 +200,14 @@ func win_wake() -> !:
     let thread_id = win_ui_thread.load(.acquire)
     if thread_id == 0:
         return
-    discard(PostThreadMessageW(thread_id, 0, 0, 0))
+    _ = PostThreadMessageW(thread_id, 0, 0, 0)
 
 # mark: Teardown ==============================================================================
 
 func win_destroy(state: State*):
     state.destroyed = true
     if let native = state.native:
-        discard(ShowWindow(native, 0))
+        _ = ShowWindow(native, 0)
     if not state.presentation_held:
         win_free(state)
 
@@ -215,6 +215,6 @@ func win_free(state: State*):
     win_revoke_drops(state)
     clear_drop_paths(state)
     if let native = state.native:
-        discard(SetWindowLongPtrW(native, -21, 0))
-        discard(DestroyWindow(native))
+        _ = SetWindowLongPtrW(native, -21, 0)
+        _ = DestroyWindow(native)
     free(state) in memory.heap

@@ -113,7 +113,7 @@ func win_pointer(state: State*, native: void*, message: u32, word: usize) -> boo
 ## A pen sample at its place in the window's client area, in points.
 func win_pen_at(native: void*, info: WinPenInfo, kind: input.EventKind, button: u32, scale: f64, held: input.Modifiers) -> input.Event:
     var position = info.info.pixel
-    discard(ScreenToClient(native, &position))
+    _ = ScreenToClient(native, &position)
     return win_pen_event(info, kind, button, (f64)position.x / scale, (f64)position.y / scale, held)
 
 func min_count(a: u32, b: u32) -> u32:
@@ -160,7 +160,7 @@ func win_promoted_kind(extra: usize) -> input.PointerKind:
 
 test "Windows pen info decodes to pressure 0..1, tilt, rotation and its end":
     var info: WinPenInfo
-    assert(sizeof(WinPointerInfo) == 96 and sizeof(WinPenInfo) == 120)
+    assert(memory.size_of(WinPointerInfo) == 96 and memory.size_of(WinPenInfo) == 120)
     info.info.flags = pointer_flag_in_contact
     info.pen_mask = pen_mask_pressure | pen_mask_rotation | pen_mask_tilt_x | pen_mask_tilt_y
     info.pressure = 512

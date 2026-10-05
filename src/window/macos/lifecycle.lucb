@@ -100,7 +100,7 @@ func mac_open(options: Options) -> State*!:
     # Deliver every mouse-moved event rather than the OS-coalesced summary, so hover
     # feedback tracks a fast pointer instead of stepping between coarse samples.
     msg_bool_arg(try native_class("NSEvent"), sel("setMouseCoalescingEnabled:"), false)
-    discard(msg_bool_object(native, sel("makeFirstResponder:"), view))
+    _ = msg_bool_object(native, sel("makeFirstResponder:"), view)
     let text_allocated = msg_ptr(try native_class("NSString"), sel("alloc")) else error(failed, "could not allocate a title")
     let title = msg_init_text(text_allocated, sel("initWithBytes:length:encoding:"), options.title.bytes.data, options.title.length, 4) else error(failed, "could not initialize the title")
     defer msg_void(title, sel("release"))
@@ -124,8 +124,8 @@ func finish_launch(app: void*) -> !:
     msg_void(app, sel("run"))
 
 func launch_callback(object: void*, selector: void*, notification: void*):
-    discard(object)
-    discard(selector)
+    _ = object
+    _ = selector
     let app = required(msg_ptr(notification, sel("object")))
     let event_class = objc_getClass("NSEvent") else trap("AppKit has no NSEvent class")
     let event = required(msg_wakeup(event_class, sel("otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:"), 15, LuceWindowMacPoint(), 0, 0.0, 0, none, 0, 0, 0))

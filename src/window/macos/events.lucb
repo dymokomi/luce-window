@@ -10,21 +10,21 @@
 #==============================================================================================
 
 func close_callback(object: void*, selector: void*, sender: void*) -> bool:
-    discard(selector)
-    discard(sender)
+    _ = selector
+    _ = sender
     if let state = get_state(object):
         state.close_requested = true
     return false
 
 func resize_callback(object: void*, selector: void*, notification: void*):
-    discard(selector)
-    discard(notification)
+    _ = selector
+    _ = notification
     if let state = get_state(object):
         push_event(state, input.Event(kind = input.EventKind.resized))
         invoke_redraw(state)
 
 func focus_callback(object: void*, selector: void*, notification: void*):
-    discard(notification)
+    _ = notification
     if let state = get_state(object):
         let gained = selector == sel("windowDidBecomeKey:")
         if not gained:
@@ -34,15 +34,15 @@ func focus_callback(object: void*, selector: void*, notification: void*):
         push_event(state, input.Event(kind = input.EventKind.focus_gained if gained else input.EventKind.focus_lost))
 
 func view_accepts(object: void*, selector: void*) -> bool:
-    discard(object)
-    discard(selector)
+    _ = object
+    _ = selector
     return true
 
 func modifiers(flags: u64) -> input.Modifiers:
     return input.Modifiers(shift = (flags & (1 << 17)) != 0, control = (flags & (1 << 18)) != 0, alt = (flags & (1 << 19)) != 0, super = (flags & (1 << 20)) != 0, caps_lock = (flags & (1 << 16)) != 0)
 
 func key_callback(object: void*, selector: void*, native: void*):
-    discard(selector)
+    _ = selector
     let state = get_state(object) else return
     let native_type = msg_uint(native, sel("type"))
     var event = input.Event(kind = input.EventKind.modifiers_changed)
@@ -61,7 +61,7 @@ func key_callback(object: void*, selector: void*, native: void*):
         msg_object(object, sel("interpretKeyEvents:"), events)
 
 func pointer_callback(object: void*, selector: void*, native: void*):
-    discard(selector)
+    _ = selector
     let state = get_state(object) else return
     let native_type = msg_uint(native, sel("type"))
     let position = msg_convert(object, sel("convertPoint:fromView:"), msg_point(native, sel("locationInWindow")), none)

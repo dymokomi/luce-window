@@ -36,9 +36,9 @@ func x11_open(options: Options) -> State*!:
     state.x_window = window
     state.x_width = width
     state.x_height = height
-    discard(x.api.select_input(x.display, window, x11_event_mask))
+    _ = x.api.select_input(x.display, window, x11_event_mask)
     var protocols: u64[1] = [x.wm_delete]
-    discard(x.api.set_wm_protocols(x.display, window, &protocols[0], 1))
+    _ = x.api.set_wm_protocols(x.display, window, &protocols[0], 1)
     try x11_set_title(x, window, options.title)
     x11_set_class(x, window)
     if not options.resizable:
@@ -50,25 +50,25 @@ func x11_open(options: Options) -> State*!:
         x.api.set_wm_normal_hints(x.display, window, &hints)
     # _NET_WM_PID (CARDINAL, 32-bit items): the desktop can tell whose window it is.
     var pid: u64 = (u64)getpid()
-    discard(x.api.change_property(x.display, window, x.api.intern_atom(x.display, "_NET_WM_PID", 0), 6, 32, 0, (const u8*)(void*)&pid, 1))
+    _ = x.api.change_property(x.display, window, x.api.intern_atom(x.display, "_NET_WM_PID", 0), 6, 32, 0, (const u8*)(void*)&pid, 1)
     if let im = x.im:
         # XIMPreeditNothing | XIMStatusNothing: composed text arrives committed.
         state.x_ic = x.api.create_ic(im, "inputStyle", 0x0008 | 0x0400, "clientWindow", window, none)
     x11_windows[slot] = state
     x11_pen_select(x.display, window)
     try x11_set_cursor(state, input.Cursor.arrow)
-    discard(x.api.flush(x.display))
+    _ = x.api.flush(x.display)
     return state
 
 ## The title as _NET_WM_NAME (UTF-8) for current desktops and WM_NAME for the rest.
 func x11_set_title(x: X11Connection, window: u64, title: str) -> !:
-    let text = try alloc u8[title.length + 1]
+    let text = try new u8[title.length + 1] ---
     defer free(text)
     for index in 0..<title.length:
         text[index] = title.bytes[index]
     text[title.length] = 0
-    discard(x.api.store_name(x.display, window, (c.str)text.data))
-    discard(x.api.change_property(x.display, window, x.net_wm_name, x.utf8_string, 8, 0, text.data, (i32)title.length))
+    _ = x.api.store_name(x.display, window, (c.str)text.data)
+    _ = x.api.change_property(x.display, window, x.net_wm_name, x.utf8_string, 8, 0, text.data, (i32)title.length)
 
 ## WM_CLASS from the program's own name, so the desktop matches the window to
 ## its launcher (luc's .desktop entries carry StartupWMClass=<program name>).
@@ -92,12 +92,12 @@ func x11_set_class(x: X11Connection, window: u64):
     value[name] = 0
     value[name * 2 + 1] = 0
     # XA_STRING is atom 31.
-    discard(x.api.change_property(x.display, window, x.wm_class, 31, 8, 0, &value[0], (i32)(name * 2 + 2)))
+    _ = x.api.change_property(x.display, window, x.wm_class, 31, 8, 0, &value[0], (i32)(name * 2 + 2))
 
 func x11_show(state: State*):
     let x = x11_connection else return
-    discard(x.api.map_window(x.display, state.x_window))
-    discard(x.api.flush(x.display))
+    _ = x.api.map_window(x.display, state.x_window)
+    _ = x.api.flush(x.display)
 
 func x11_size(state: State*) -> Size:
     var scale = 1.0
@@ -109,8 +109,8 @@ func x11_size(state: State*) -> Size:
 
 func x11_resize(state: State*, width: u32, height: u32) -> !:
     let x = try x11_connect()
-    discard(x.api.resize_window(x.display, state.x_window, (u32)math_round((f64)width * x.scale), (u32)math_round((f64)height * x.scale)))
-    discard(x.api.flush(x.display))
+    _ = x.api.resize_window(x.display, state.x_window, (u32)math_round((f64)width * x.scale), (u32)math_round((f64)height * x.scale))
+    _ = x.api.flush(x.display)
 
 ## Full screen through _NET_WM_STATE: set as the window's property before it is
 ## mapped, asked of the window manager once it is. ConfigureNotify then queues
@@ -130,14 +130,14 @@ func x11_set_fullscreen(state: State*, enabled: bool) -> !:
         message.data[1] = (i64)x.net_wm_fullscreen
         message.data[3] = 1
         # SubstructureRedirect | SubstructureNotify on the root: the window manager's.
-        discard(x.api.send_event(x.display, x.root, 0, (1 << 20) | (1 << 19), (void*)&event))
+        _ = x.api.send_event(x.display, x.root, 0, (1 << 20) | (1 << 19), (void*)&event)
     elif enabled:
         var atom: u64 = x.net_wm_fullscreen
         # XA_ATOM is atom 4.
-        discard(x.api.change_property(x.display, state.x_window, x.net_wm_state, 4, 32, 0, (const u8*)(void*)&atom, 1))
+        _ = x.api.change_property(x.display, state.x_window, x.net_wm_state, 4, 32, 0, (const u8*)(void*)&atom, 1)
     else:
-        discard(x.api.delete_property(x.display, state.x_window, x.net_wm_state))
-    discard(x.api.flush(x.display))
+        _ = x.api.delete_property(x.display, state.x_window, x.net_wm_state)
+    _ = x.api.flush(x.display)
     state.fullscreen = enabled
 
 func x11_visible(state: State*) -> bool:
@@ -155,7 +155,7 @@ func x11_pump(waiting: State*):
     var event: XEventBuffer
     var count: usize = 0
     while count < 256 and x.api.pending(x.display) > 0:
-        discard(x.api.next_event(x.display, (void*)&event))
+        _ = x.api.next_event(x.display, (void*)&event)
         count += 1
         # The input method takes the keys it composes with.
         if x.api.filter_event((void*)&event, 0) != 0:
@@ -172,12 +172,12 @@ func x11_pump(waiting: State*):
 ## drain like x11_pump. The resolution is milliseconds.
 func x11_wait(waiting: State*, timeout_ns: u64):
     let x = x11_connection else return
-    discard(x.api.flush(x.display))
+    _ = x.api.flush(x.display)
     if x.api.pending(x.display) == 0:
         let ms64 = (timeout_ns + 999999) // 1000000
         let milliseconds: i32 = -1 if ms64 >= 0x7FFFFFFF else (i32)ms64
         var fds: PollFd[2] = [PollFd(fd = x.api.connection_number(x.display), events = 1, revents = 0), PollFd(fd = x.wake_read, events = 1, revents = 0)]
-        discard(poll(&fds[0], 2, milliseconds))
+        _ = poll(&fds[0], 2, milliseconds)
         var drained: u8[64]
         while read(x.wake_read, (void*)&drained[0], 64) > 0:
             continue
@@ -189,7 +189,7 @@ func x11_wake() -> !:
     if fd == 0:
         return
     var byte: u8 = 1
-    discard(write((i32)fd - 1, (const void*)&byte, 1))
+    _ = write((i32)fd - 1, (const void*)&byte, 1)
 
 # mark: Teardown ==============================================================================
 
@@ -199,8 +199,8 @@ func x11_destroy(state: State*):
     state.destroyed = true
     if let x = x11_connection:
         if state.x_window != 0:
-            discard(x.api.unmap_window(x.display, state.x_window))
-            discard(x.api.flush(x.display))
+            _ = x.api.unmap_window(x.display, state.x_window)
+            _ = x.api.flush(x.display)
     if not state.presentation_held:
         x11_free(state)
 
@@ -214,8 +214,8 @@ func x11_free(state: State*):
         if let ic = state.x_ic:
             x.api.destroy_ic(ic)
         if state.x_window != 0:
-            discard(x.api.destroy_window(x.display, state.x_window))
+            _ = x.api.destroy_window(x.display, state.x_window)
         if state.x_cursor != 0:
-            discard(x.api.free_cursor(x.display, state.x_cursor))
-        discard(x.api.flush(x.display))
+            _ = x.api.free_cursor(x.display, state.x_cursor)
+        _ = x.api.flush(x.display)
     free(state) in memory.heap

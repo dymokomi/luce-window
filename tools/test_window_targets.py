@@ -23,13 +23,13 @@ pub func main(arguments: str[]) -> i32!:
     try host.set_cursor(input.Cursor.text)
     try host.set_cursor(input.Cursor.resize_horizontal)
     assert((try host.cursor()) == input.Cursor.resize_horizontal)
-    discard(try host.wait(1000000))
+    _ = try host.wait(1000000)
     try window.wake()
     var lease = try host.acquire_presentation()
     defer lease.destroy()
     if platform.linux:
-        discard(try lease.x11_display())
-        discard(try lease.x11_window())
+        _ = try lease.x11_display()
+        _ = try lease.x11_window()
     return 0
 ''')
     for target in ['arm64-macos', 'x86_64-windows', 'x86_64-linux', 'arm64-linux']:

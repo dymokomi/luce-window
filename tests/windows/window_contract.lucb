@@ -16,7 +16,7 @@ pub func main(arguments: str[]) -> i32!:
     try first.resize(480, 320)
     let extent = try first.size()
     assert(extent.width == 480.0 and extent.height == 320.0)
-    while let event = try first.poll(): discard(event)
+    while let event = try first.poll(): _ = event
     let handle = try lease.windows_handle()
     assert(PostMessageW(handle, 256, 65, 30 << 16) != 0)
     assert(PostMessageW(handle, 257, 65, (30 << 16) | 2147483648) != 0)

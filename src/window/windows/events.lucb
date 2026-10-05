@@ -87,7 +87,7 @@ func win_callback(native: void*, message: u32, word: usize, value: isize) -> isi
         # CREATESTRUCTW begins with the application-supplied pointer.
         let state = *(State**)(void*)value
         state.native = native
-        discard(SetWindowLongPtrW(native, -21, (isize)(void*)state))
+        _ = SetWindowLongPtrW(native, -21, (isize)(void*)state)
         return DefWindowProcW(native, message, word, value)
     let stored = GetWindowLongPtrW(native, -21)
     if stored == 0:
@@ -96,7 +96,7 @@ func win_callback(native: void*, message: u32, word: usize, value: isize) -> isi
     if state.destroyed:
         return DefWindowProcW(native, message, word, value)
     if message == 32 and (value & 65535) == 1:
-        discard(SetCursor(state.native_cursor))
+        _ = SetCursor(state.native_cursor)
         return 1
     if message == 16:
         state.close_requested = true
@@ -121,7 +121,7 @@ func win_callback(native: void*, message: u32, word: usize, value: isize) -> isi
         return 0
     elif message == 736:
         let rect = (WinRect*)(void*)value
-        discard(SetWindowPos(native, none, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, 20))
+        _ = SetWindowPos(native, none, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, 20)
         push_event(state, input.Event(kind = input.EventKind.resized))
         return 0
     elif message == 256 or message == 257 or message == 260 or message == 261:
@@ -145,7 +145,7 @@ func win_callback(native: void*, message: u32, word: usize, value: isize) -> isi
         var point = WinPoint(x = signed_half(value), y = signed_half(value >> 16))
         let scrolling = message == 522 or message == 526
         if scrolling:
-            discard(ScreenToClient(native, &point))
+            _ = ScreenToClient(native, &point)
         let dpi = GetDpiForWindow(native)
         let scale = (f64)dpi / 96.0 if dpi > 0 else 1.0
         var event = input.Event(kind = input.EventKind.pointer_moved, modifiers = win_modifiers(), x = (f64)point.x / scale, y = (f64)point.y / scale)
@@ -154,7 +154,7 @@ func win_callback(native: void*, message: u32, word: usize, value: isize) -> isi
         if message == 512:
             push_merged_moves(state, native, point, (word & 19) != 0, scale, event.modifiers)
         if message == 512 and not state.pointer_tracking:
-            var tracking = WinMouseTracking(size = (u32)sizeof(WinMouseTracking), flags = 2, window = native)
+            var tracking = WinMouseTracking(size = (u32)memory.size_of(WinMouseTracking), flags = 2, window = native)
             state.pointer_tracking = TrackMouseEvent(&tracking) != 0
             var entered = event
             entered.kind = input.EventKind.pointer_entered
@@ -175,9 +175,9 @@ func win_callback(native: void*, message: u32, word: usize, value: isize) -> isi
             event.kind = input.EventKind.pointer_down if down else input.EventKind.pointer_up
             event.button = 0 if message <= 514 else (1 if message <= 517 else (2 if message <= 520 else (u32)(word >> 16) + 2))
             if down:
-                discard(SetCapture(native))
+                _ = SetCapture(native)
             elif (word & 115) == 0:
-                discard(ReleaseCapture())
+                _ = ReleaseCapture()
         push_event(state, event)
         return 0
     return DefWindowProcW(native, message, word, value)
@@ -188,7 +188,7 @@ func win_callback(native: void*, message: u32, word: usize, value: isize) -> isi
 ## and are queued, oldest first, before the current one.
 func push_merged_moves(state: State*, native: void*, client: WinPoint, held: bool, scale: f64, held_keys: input.Modifiers):
     var screen = client
-    discard(ClientToScreen(native, &screen))
+    _ = ClientToScreen(native, &screen)
     let known = state.move_known
     let last_x = state.move_x
     let last_y = state.move_y
@@ -204,10 +204,10 @@ func push_merged_moves(state: State*, native: void*, client: WinPoint, held: boo
     # GMMP_USE_DISPLAY_POINTS. The message time is when the merged move was read,
     # often a timer tick (~15.6 ms) after the history's time for that point, so
     # the exact lookup can miss (-1); a zero time matches the newest entry there.
-    var found = GetMouseMovePointsEx((u32)sizeof(WinMovePoint), &current, &merged[0], 64, 1)
+    var found = GetMouseMovePointsEx((u32)memory.size_of(WinMovePoint), &current, &merged[0], 64, 1)
     if found < 1:
         var any_time = WinMovePoint(x = screen.x & 65535, y = screen.y & 65535, time = 0, extra = 0)
-        found = GetMouseMovePointsEx((u32)sizeof(WinMovePoint), &any_time, &merged[0], 64, 1)
+        found = GetMouseMovePointsEx((u32)memory.size_of(WinMovePoint), &any_time, &merged[0], 64, 1)
     if found < 1:
         return
     # The history's own time for this point: a merged move is stamped when it
@@ -227,6 +227,6 @@ func push_merged_moves(state: State*, native: void*, client: WinPoint, held: boo
     while index >= 1:
         let entry = merged[(usize)index]
         var position = WinPoint(x = entry.x - 65536 if entry.x > 32767 else entry.x, y = entry.y - 65536 if entry.y > 32767 else entry.y)
-        discard(ScreenToClient(native, &position))
+        _ = ScreenToClient(native, &position)
         push_event(state, input.Event(kind = input.EventKind.pointer_moved, modifiers = held_keys, x = (f64)position.x / scale, y = (f64)position.y / scale))
         index -= 1

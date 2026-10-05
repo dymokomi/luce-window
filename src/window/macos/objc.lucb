@@ -86,15 +86,15 @@ func required(object: void*?) -> void*:
 
 func get_state(object: void*) -> State*?:
     var pointer: void*?
-    discard(object_getInstanceVariable(object, "luceState", &pointer))
+    _ = object_getInstanceVariable(object, "luceState", &pointer)
     let value = pointer else return none
     return (State*)value
 
 func set_state(object: void*, state: State*?):
     if let pointer = state:
-        discard(object_setInstanceVariable(object, "luceState", (void*)pointer))
+        _ = object_setInstanceVariable(object, "luceState", (void*)pointer)
     else:
-        discard(object_setInstanceVariable(object, "luceState", none))
+        _ = object_setInstanceVariable(object, "luceState", none)
 
 func add_method(native_type: void*, name: c.str, implementation: void*, encoding: c.str) -> !:
     if not class_addMethod(native_type, sel(name), implementation, encoding):

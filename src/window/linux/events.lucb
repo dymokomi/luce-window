@@ -75,7 +75,7 @@ func x11_key_event(x: X11Connection, state: State*, event: XEventBuffer*):
         # Without detectable auto-repeat a held key sends release and press at one
         # time: the release is dropped and the press below is known as a repeat.
         var next: XEventBuffer
-        discard(x.api.peek_event(x.display, (void*)&next))
+        _ = x.api.peek_event(x.display, (void*)&next)
         let following = (XKeyEvent*)(void*)&next
         if following.kind == x_key_press and following.keycode == key_event.keycode and following.time == key_event.time:
             return

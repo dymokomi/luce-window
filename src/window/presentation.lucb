@@ -59,7 +59,7 @@ pub struct Presentation:
 
     ## Borrowed X11 Display* for graphics backends, valid until window destruction.
     pub func x11_display() -> void*!:
-        discard(try self.checked())
+        _ = try self.checked()
         if platform.linux:
             let x = x11_connection else error(closed, "the X11 connection is closed")
             return x.display
@@ -73,10 +73,10 @@ pub struct Presentation:
         error(unsupported, "this window has no X11 window")
 
     ## Release the lease on the main thread.
-    pub mutating func destroy():
+    pub func destroy():
         let state = self.state else return
         check_thread() catch failure:
-            discard(failure)
+            _ = failure
             trap("presentation lease destruction requires the main thread")
         self.state = none
         state.presentation_held = false

@@ -5,7 +5,7 @@ import thread
 ## and event foundation before a graphics backend is attached. Escape requests
 ## closure; the title-bar button follows the same application-owned close path.
 pub func main(arguments: str[]) -> i32!:
-    discard(arguments)
+    _ = arguments
     var surface = try window.Window.open(window.Options(title = "Luce — native window"))
     defer surface.destroy()
     try surface.show()
@@ -25,7 +25,7 @@ pub func main(arguments: str[]) -> i32!:
                 .overflow:
                     print("input queue overflow; discard held input state")
                 _:
-                    discard(event)
+                    _ = event
         if running:
             thread.sleep(8)
     return 0

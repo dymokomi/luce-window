@@ -77,7 +77,7 @@ pub struct Window:
 
     ## Open a hidden window. Call show after setup. Titles must be valid UTF-8;
     ## content dimensions are 1..10000 points. No graphics API is initialized.
-    pub static func open(options: Options = Options()) -> Window!:
+    pub func open(options: Options = Options()) -> Window!:
         try check_thread()
         try check_extent(options.width, options.height)
         if not utf8.valid(options.title.bytes):
@@ -102,7 +102,7 @@ pub struct Window:
         if platform.macos and platform.arm64:
             mac_show(state)
         if platform.windows:
-            discard(ShowWindow(required(state.native), 5))
+            _ = ShowWindow(required(state.native), 5)
         if platform.linux:
             x11_show(state)
 
@@ -246,10 +246,10 @@ pub struct Window:
 
     ## Idempotent on this value. Detach callbacks before releasing native objects
     ## and storage. Calling from another thread traps instead of leaking silently.
-    pub mutating func destroy():
+    pub func destroy():
         let state = self.state else return
         check_thread() catch failure:
-            discard(failure)
+            _ = failure
             trap("window destruction requires the main thread")
         self.state = none
         if platform.macos and platform.arm64:
