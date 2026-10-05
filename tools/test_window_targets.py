@@ -35,7 +35,7 @@ pub func main(arguments: str[]) -> i32!:
         _ = try lease.x11_display()
         _ = try lease.x11_window()
     return 0
-''')
+''', encoding='utf-8')
     for target in ['arm64-macos', 'x86_64-windows', 'x86_64-linux', 'arm64-linux']:
         for level in [0, 3]:
             output = work / 'probe.s'
