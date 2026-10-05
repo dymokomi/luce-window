@@ -25,7 +25,7 @@ Add the dependency to `package.prisma`; the modules keep their short names:
 ```prisma
 def dependency "luce-window" {
     str owner = "dymokomi"
-    str version = "^0.5.0"
+    str version = "^0.6.0"
 }
 ```
 
