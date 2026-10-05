@@ -77,7 +77,7 @@ pub struct Window:
 
     ## Open a hidden window. Call show after setup. Titles must be valid UTF-8;
     ## content dimensions are 1..10000 points. No graphics API is initialized.
-    pub func open(options: Options = Options()) -> Window!:
+    pub static func open(options: Options = Options()) -> Window!:
         try check_thread()
         try check_extent(options.width, options.height)
         if not utf8.valid(options.title.bytes):
