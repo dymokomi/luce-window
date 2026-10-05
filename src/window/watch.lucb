@@ -1,0 +1,72 @@
+#==============================================================================================
+#
+#   watch - Descriptors a wait() also wakes for
+#
+#   DESCRIPTION:
+#       A program with sockets open (a browser loading pages) watches their descriptors so
+#       Window.wait returns as soon as one is ready, instead of waking on a short timer to
+#       poll them. The table is process-wide and main-thread only, like the windows. Each host
+#       adds the descriptors to its own blocking wait: poll beside the X connection on Linux,
+#       a kqueue the main run loop watches on macOS (macos/watch.lucb), and one WSAEventSelect
+#       event beside the message queue on Windows (windows/watch.lucb). Readiness is
+#       level-triggered, as with poll: a descriptor left ready ends every wait at once until
+#       it is read, written or unwatched.
+#
+#==============================================================================================
+
+## What a watched descriptor wakes a wait() for.
+pub enum Interest as u8:
+    ## Data to read, a connection to accept, or the peer hanging up.
+    readable = 1
+    ## Room to write, or a nonblocking connect that has finished.
+    writable = 2
+    ## Either of them.
+    both = 3
+
+struct Watched:
+    var descriptor: platform.SocketDescriptor
+    var reads: bool
+    var writes: bool
+
+var watched: Watched[64]
+var watched_count: usize
+
+## Make every wait() also return when `descriptor` is ready for `interest`; watching
+## it again replaces the interest. wait() only returns (as on a timeout or a wake): the
+## caller finds which descriptor is ready with a zero-deadline poll or nonblocking I/O.
+## Up to 64 descriptors, borrowed: unwatch before closing one. Sockets and pipes; on
+## Windows only sockets, which watching makes nonblocking (WSAEventSelect). Main thread
+## only.
+pub func watch(descriptor: platform.SocketDescriptor, interest: Interest) -> !:
+    try check_thread()
+    if (i64)descriptor < 0:
+        error(invalid_options, "a watched descriptor must be valid")
+    if (u8)interest < 1 or (u8)interest > 3:
+        error(invalid_options, "unknown readiness interest")
+    var index = watched_count
+    for slot in 0..<watched_count:
+        if watched[slot].descriptor == descriptor:
+            index = slot
+    if index == watched.length:
+        error(failed, "at most 64 descriptors can be watched")
+    let entry = Watched(descriptor = descriptor, reads = ((u8)interest & 1) != 0, writes = ((u8)interest & 2) != 0)
+    if platform.macos and platform.arm64:
+        try mac_watch(entry)
+    if platform.windows:
+        try win_watch(entry)
+    watched[index] = entry
+    if index == watched_count:
+        watched_count += 1
+
+## Stop watching `descriptor`; nothing happens when it is not watched. Main thread only.
+pub func unwatch(descriptor: platform.SocketDescriptor) -> !:
+    try check_thread()
+    for slot in 0..<watched_count:
+        if watched[slot].descriptor == descriptor:
+            if platform.macos and platform.arm64:
+                mac_unwatch(descriptor)
+            if platform.windows:
+                win_unwatch(descriptor)
+            watched_count -= 1
+            watched[slot] = watched[watched_count]
+            return

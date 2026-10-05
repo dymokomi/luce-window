@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Ensure the public text-input API emits only the selected host's native calls."""
+"""Ensure the public window API (text input, cursors, titles, waits, watches) emits only the
+selected host's native calls."""
 import argparse
 from pathlib import Path
 import subprocess
@@ -23,7 +24,10 @@ pub func main(arguments: str[]) -> i32!:
     try host.set_cursor(input.Cursor.text)
     try host.set_cursor(input.Cursor.resize_horizontal)
     assert((try host.cursor()) == input.Cursor.resize_horizontal)
+    try host.set_title("Retitled — 日本語")
+    try window.watch((platform.SocketDescriptor)0, window.Interest.both)
     _ = try host.wait(1000000)
+    try window.unwatch((platform.SocketDescriptor)0)
     try window.wake()
     var lease = try host.acquire_presentation()
     defer lease.destroy()
@@ -43,14 +47,16 @@ pub func main(arguments: str[]) -> i32!:
                     assert symbol not in assembly, (target, level, symbol)
             if target.endswith('linux'):
                 for symbol in ['CreateWindowExW', 'DefWindowProcW', 'GetModuleHandleW', 'LoadCursorW', 'SetCursor', 'GetCursorPos',
-                               'MsgWaitForMultipleObjectsEx', 'PostThreadMessageW']:
+                               'MsgWaitForMultipleObjectsEx', 'PostThreadMessageW', 'WSAEventSelect', 'kevent']:
                     assert symbol not in assembly, (target, level, symbol)
             # wait/wake must emit the host's own blocking-pump and thread-safe post
             if target.endswith('macos'):
-                for symbol in ['nextEventMatchingMask', 'postEvent:atStart:', 'dateWithTimeIntervalSinceNow:']:
+                for symbol in ['nextEventMatchingMask', 'postEvent:atStart:', 'dateWithTimeIntervalSinceNow:', 'setTitle:',
+                               'kqueue', 'kevent', 'CFFileDescriptorCreate', 'CFFileDescriptorEnableCallBacks']:
                     assert symbol in assembly, (target, level, symbol)
             if target.endswith('windows'):
-                for symbol in ['MsgWaitForMultipleObjectsEx', 'PostThreadMessageW', 'GetPointerPenInfo', 'GetPointerPenInfoHistory']:
+                for symbol in ['MsgWaitForMultipleObjectsEx', 'PostThreadMessageW', 'GetPointerPenInfo', 'GetPointerPenInfoHistory',
+                               'SetWindowTextW', 'WSAEventSelect', 'WSAPoll', 'WSAResetEvent']:
                     assert symbol in assembly, (target, level, symbol)
             # Linux loads Xlib at run time and blocks in poll() on the display and a wake pipe
             if target.endswith('linux'):
@@ -63,4 +69,4 @@ pub func main(arguments: str[]) -> i32!:
             if target.endswith('macos'):
                 for symbol in ['tabletProximity:', 'tangentialPressure', 'pointingDeviceType']:
                     assert symbol in assembly, (target, level, symbol)
-            print('PASS text input, cursor, wait, wake and pen target', target, level, flush=True)
+            print('PASS text input, cursor, title, wait, watch, wake and pen target', target, level, flush=True)

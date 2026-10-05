@@ -13,6 +13,18 @@ func waker(context: void*?):
         _ = failure
         trap("window.wake() from a worker thread failed")
 
+extern func pipe(descriptors: i32*) -> i32
+extern func write(descriptor: i32, bytes: const void*, count: usize) -> isize
+extern func read(descriptor: i32, bytes: void*, count: usize) -> isize
+extern func close_descriptor as "close"(descriptor: i32) -> i32
+
+## Make a watched pipe readable from another thread after a short delay.
+func writer(context: void*?):
+    let pointer = context else trap("missing test context")
+    thread.sleep(50)
+    var byte: u8 = 1
+    assert(write(*(i32*)pointer, (const void*)&byte, 1) == 1)
+
 func wrong_thread(context: void*?):
     let pointer = context else trap("missing test context")
     let rejected = (bool*)pointer
@@ -108,6 +120,32 @@ pub func main(arguments: str[]) -> i32!:
         try waker_thread.join()
         assert(time.since(started) < 5000000000)
         try flush(&first)
+        # A watched descriptor turning ready ends a wait the same way, and one left
+        # ready ends the next wait at once; unwatched, it no longer does.
+        var ends: i32[2] = [0, 0]
+        assert(pipe(&ends[0]) == 0)
+        try window.watch(ends[0], window.Interest.readable)
+        var writer_thread = try thread.spawn(writer, (void*)&ends[1])
+        let watching = time.now()
+        _ = try first.wait(3600000000000)
+        try writer_thread.join()
+        assert(time.since(watching) < 5000000000)
+        try flush(&first)
+        let still_ready = time.now()
+        _ = try first.wait(3600000000000)
+        assert(time.since(still_ready) < 5000000000)
+        var drained: u8 = 0
+        assert(read(ends[0], (void*)&drained, 1) == 1)
+        try window.unwatch(ends[0])
+        let unwatched = time.now()
+        _ = try first.wait(50000000)
+        assert(time.since(unwatched) >= 40000000)
+        _ = close_descriptor(ends[0])
+        _ = close_descriptor(ends[1])
+        try flush(&first)
+        try first.set_title("Luce test Ä")
+        _ = native.find("Luce test Ä")
+        try first.set_title("Luce test A")
         native.focus_notification(native.find("Luce test A"), true)
         _ = try expect(&first, input.EventKind.focus_gained)
         native.focus_notification(native.find("Luce test A"), false)

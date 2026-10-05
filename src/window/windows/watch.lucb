@@ -1,0 +1,68 @@
+#==============================================================================================
+#
+#   watch - Watched sockets in the Win32 wait
+#
+#   DESCRIPTION:
+#       Every watched socket signals one event object through WSAEventSelect, and the wait
+#       hands that event to MsgWaitForMultipleObjectsEx beside the message queue. Network
+#       events are edge-recorded (one is signalled again only after the call that consumes
+#       it), so before blocking win_watch_ready resets the event and asks WSAPoll, which is
+#       level-triggered, whether a socket is already ready: then the wait does not block.
+#
+#==============================================================================================
+
+## WSAPOLLFD.
+extern struct WinPoll:
+    descriptor: platform.SocketDescriptor
+    events: i16
+    returned: i16
+
+extern func WSACreateEvent() -> void*?
+extern func WSAEventSelect(socket: platform.SocketDescriptor, event: void*?, events: i32) -> i32
+extern func WSAResetEvent(event: void*) -> i32
+extern func WSAPoll(entries: WinPoll*, count: u32, milliseconds: i32) -> i32
+
+# The event every watched socket signals, made on the first watch and kept for the
+# process's life.
+var win_watch_event: void*?
+
+## FD_READ, FD_ACCEPT and FD_CLOSE for reading; FD_WRITE, FD_CONNECT and FD_CLOSE for
+## writing.
+func win_network_events(entry: Watched) -> i32:
+    var events: i32 = 0
+    if entry.reads:
+        events = events | 1 | 8 | 32
+    if entry.writes:
+        events = events | 2 | 16 | 32
+    return events
+
+func win_watch(entry: Watched) -> !:
+    if win_watch_event == none:
+        win_watch_event = WSACreateEvent()
+    let event = win_watch_event else error(failed, "the watch event could not be created")
+    if WSAEventSelect(entry.descriptor, event, win_network_events(entry)) != 0:
+        error(failed, "the socket could not be watched")
+
+func win_unwatch(descriptor: platform.SocketDescriptor):
+    _ = WSAEventSelect(descriptor, none, 0)
+
+## The event the wait also waits on, reset, or none when nothing is watched; `ready`
+## learns whether a watched socket is ready already.
+func win_watch_ready(ready: bool*) -> void*?:
+    *ready = false
+    let event = win_watch_event else return none
+    if watched_count == 0:
+        return none
+    _ = WSAResetEvent(event)
+    var entries: WinPoll[64]
+    for slot in 0..<watched_count:
+        var events: i16 = 0
+        if watched[slot].reads:
+            # POLLRDNORM | POLLRDBAND
+            events = events | 768
+        if watched[slot].writes:
+            # POLLWRNORM
+            events = events | 16
+        entries[slot] = WinPoll(descriptor = watched[slot].descriptor, events = events, returned = 0)
+    *ready = WSAPoll(&entries[0], (u32)watched_count, 0) > 0
+    return event

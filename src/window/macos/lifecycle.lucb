@@ -101,12 +101,18 @@ func mac_open(options: Options) -> State*!:
     # feedback tracks a fast pointer instead of stepping between coarse samples.
     msg_bool_arg(try native_class("NSEvent"), sel("setMouseCoalescingEnabled:"), false)
     _ = msg_bool_object(native, sel("makeFirstResponder:"), view)
-    let text_allocated = msg_ptr(try native_class("NSString"), sel("alloc")) else error(failed, "could not allocate a title")
-    let title = msg_init_text(text_allocated, sel("initWithBytes:length:encoding:"), options.title.bytes.data, options.title.length, 4) else error(failed, "could not initialize the title")
-    defer msg_void(title, sel("release"))
-    msg_object(native, sel("setTitle:"), title)
+    try mac_set_title(state, options.title)
     msg_void(native, sel("center"))
     return state
+
+func mac_set_title(state: State*, text: str) -> !:
+    let pool = objc_autoreleasePoolPush()
+    defer objc_autoreleasePoolPop(pool)
+    let text_allocated = msg_ptr(try native_class("NSString"), sel("alloc")) else error(failed, "could not allocate a title")
+    # initWithBytes:length:encoding: with NSUTF8StringEncoding (4).
+    let title = msg_init_text(text_allocated, sel("initWithBytes:length:encoding:"), text.bytes.data, text.length, 4) else error(failed, "could not initialize the title")
+    defer msg_void(title, sel("release"))
+    msg_object(required(state.native), sel("setTitle:"), title)
 
 ## Complete AppKit's launch through its run loop before using our polling loop.
 ## Merely calling finishLaunching can leave an unbundled process unable to become
@@ -201,18 +207,20 @@ func mac_pump(waiting: State*):
             break
     msg_void(app, sel("updateWindows"))
 
-## Block up to `timeout_ns` for the first event (a wake() posts one), deliver it, then
-## drain the rest like mac_pump. A timeout with no event leaves the queue empty.
+## Block up to `timeout_ns` for the first event (a wake() posts one, and so does a
+## watched descriptor turning ready), deliver it, then drain the rest like mac_pump. A
+## timeout with no event leaves the queue empty.
 func mac_wait(waiting: State*, timeout_ns: u64):
     let app = application else return
     let pool = objc_autoreleasePoolPush()
     defer objc_autoreleasePoolPop(pool)
     let date_class = objc_getClass("NSDate") else trap("AppKit has no NSDate class")
+    let past = required(msg_ptr(date_class, sel("distantPast")))
+    # A watched descriptor that is ready already ends the wait at once.
     let seconds = (f64)timeout_ns / 1000000000.0
-    let deadline = required(msg_interval(date_class, sel("dateWithTimeIntervalSinceNow:"), seconds))
+    let deadline = past if mac_watch_ready() else required(msg_interval(date_class, sel("dateWithTimeIntervalSinceNow:"), seconds))
     if let event = msg_next(app, sel("nextEventMatchingMask:untilDate:inMode:dequeue:"), ~(u64)0, deadline, NSDefaultRunLoopMode, true):
         msg_object(app, sel("sendEvent:"), event)
-        let past = required(msg_ptr(date_class, sel("distantPast")))
         var count: usize = 0
         while count < 256:
             if waiting.count > 0 or waiting.close_requested or waiting.overflowed:

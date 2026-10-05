@@ -1,0 +1,111 @@
+#==============================================================================================
+#
+#   watch - Watched descriptors in the AppKit wait
+#
+#   DESCRIPTION:
+#       The watched descriptors are registered, level-triggered, in one kqueue. A
+#       CFFileDescriptor on the kqueue sits in the main run loop, which nextEventMatchingMask
+#       runs while it waits: when the kqueue turns readable its one-shot callback posts the
+#       same application-defined event wake() does, so the wait returns. Before blocking,
+#       mac_watch_ready drains the kqueue without waiting; a level-triggered knote that is
+#       still ready comes back at once, so a ready descriptor never blocks the wait, and one
+#       a closed descriptor left behind is gone (closing removes it from the kqueue).
+#
+#==============================================================================================
+
+## struct kevent.
+extern struct KernelEvent:
+    ident: usize
+    filter: i16
+    flags: u16
+    fflags: u32
+    data: isize
+    udata: void*?
+
+## struct timespec.
+extern struct KernelTime:
+    seconds: i64
+    nanoseconds: i64
+
+## CFFileDescriptorContext.
+extern struct DescriptorContext:
+    version: isize
+    info: void*?
+    retain: void*?
+    release: void*?
+    describe: void*?
+
+extern func kqueue() -> i32
+extern func kevent(queue: i32, changes: const KernelEvent*?, change_count: i32, events: KernelEvent*?, event_count: i32, timeout: const KernelTime*?) -> i32
+extern func CFFileDescriptorCreate(allocator: void*?, descriptor: i32, close_on_invalidate: bool, callout: void*, context: DescriptorContext*) -> void*?
+extern func CFFileDescriptorCreateRunLoopSource(allocator: void*?, descriptor: void*, order: isize) -> void*?
+extern func CFFileDescriptorEnableCallBacks(descriptor: void*, types: u64)
+extern func CFRunLoopGetMain() -> void*
+extern func CFRunLoopAddSource(run_loop: void*, source: void*, mode: void*)
+extern func CFRelease(object: void*)
+extern var kCFRunLoopCommonModes: void*
+
+let kernel_read: i16 = -1
+let kernel_write: i16 = -2
+let kernel_add: u16 = 1
+let kernel_delete: u16 = 2
+
+# The kqueue (-1 until the first watch) and its run-loop descriptor, both kept for the
+# process's life.
+var mac_watch_queue: i32 = -1
+var mac_watch_descriptor: void*?
+
+## The kqueue and its run-loop source, made on the first watch.
+func mac_watch_setup() -> i32!:
+    if mac_watch_queue >= 0:
+        return mac_watch_queue
+    let queue = kqueue()
+    if queue < 0:
+        error(failed, "the watch kqueue could not be created")
+    var context = DescriptorContext(version = 0)
+    let descriptor = CFFileDescriptorCreate(none, queue, false, (void*)mac_watch_callback, &context) else error(failed, "the watch kqueue could not join the run loop")
+    let source = CFFileDescriptorCreateRunLoopSource(none, descriptor, 0) else error(failed, "the watch kqueue could not join the run loop")
+    CFRunLoopAddSource(CFRunLoopGetMain(), source, kCFRunLoopCommonModes)
+    CFRelease(source)
+    mac_watch_queue = queue
+    mac_watch_descriptor = descriptor
+    return queue
+
+func mac_watch_change(queue: i32, descriptor: platform.SocketDescriptor, filter: i16, wanted: bool) -> !:
+    let change = KernelEvent(ident = (usize)descriptor, filter = filter, flags = kernel_add if wanted else kernel_delete)
+    # A delete of a filter that was never added fails; only an add must succeed.
+    if kevent(queue, &change, 1, none, 0, none) < 0 and wanted:
+        error(failed, "the descriptor could not be watched")
+
+func mac_watch(entry: Watched) -> !:
+    let queue = try mac_watch_setup()
+    try mac_watch_change(queue, entry.descriptor, kernel_read, entry.reads)
+    try mac_watch_change(queue, entry.descriptor, kernel_write, entry.writes)
+
+func mac_unwatch(descriptor: platform.SocketDescriptor):
+    if mac_watch_queue < 0:
+        return
+    for filter in [kernel_read, kernel_write]:
+        mac_watch_change(mac_watch_queue, descriptor, filter, false) catch failure:
+            _ = failure
+
+## Whether a watched descriptor is ready now. If none is, arm the run-loop callback so
+## the coming wait returns when one becomes ready.
+func mac_watch_ready() -> bool:
+    if mac_watch_queue < 0 or watched_count == 0:
+        return false
+    var event: KernelEvent
+    let immediately = KernelTime(seconds = 0, nanoseconds = 0)
+    if kevent(mac_watch_queue, none, 0, &event, 1, &immediately) > 0:
+        return true
+    if let descriptor = mac_watch_descriptor:
+        # kCFFileDescriptorReadCallBack; callbacks are one-shot until enabled again.
+        CFFileDescriptorEnableCallBacks(descriptor, 1)
+    return false
+
+func mac_watch_callback(descriptor: void*, types: u64, info: void*?):
+    _ = descriptor
+    _ = types
+    _ = info
+    mac_wake() catch failure:
+        _ = failure

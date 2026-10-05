@@ -70,6 +70,11 @@ func x11_set_title(x: X11Connection, window: u64, title: str) -> !:
     _ = x.api.store_name(x.display, window, (c.str)text.data)
     _ = x.api.change_property(x.display, window, x.net_wm_name, x.utf8_string, 8, 0, text.data, (i32)title.length)
 
+func x11_retitle(state: State*, title: str) -> !:
+    let x = try x11_connect()
+    try x11_set_title(x, state.x_window, title)
+    _ = x.api.flush(x.display)
+
 ## WM_CLASS from the program's own name, so the desktop matches the window to
 ## its launcher (luc's .desktop entries carry StartupWMClass=<program name>).
 func x11_set_class(x: X11Connection, window: u64):
@@ -168,16 +173,22 @@ func x11_pump(waiting: State*):
         if waiting.count > 0 or waiting.close_requested or waiting.overflowed:
             break
 
-## Block up to `timeout_ns` until the display or a wake() has something, then
-## drain like x11_pump. The resolution is milliseconds.
+## Block up to `timeout_ns` until the display, a wake() or a watched descriptor has
+## something, then drain like x11_pump. The resolution is milliseconds.
 func x11_wait(waiting: State*, timeout_ns: u64):
     let x = x11_connection else return
     _ = x.api.flush(x.display)
     if x.api.pending(x.display) == 0:
         let ms64 = (timeout_ns + 999999) // 1000000
         let milliseconds: i32 = -1 if ms64 >= 0x7FFFFFFF else (i32)ms64
-        var fds: PollFd[2] = [PollFd(fd = x.api.connection_number(x.display), events = 1, revents = 0), PollFd(fd = x.wake_read, events = 1, revents = 0)]
-        _ = poll(&fds[0], 2, milliseconds)
+        var fds: PollFd[66]
+        fds[0] = PollFd(fd = x.api.connection_number(x.display), events = 1, revents = 0)
+        fds[1] = PollFd(fd = x.wake_read, events = 1, revents = 0)
+        # The watched descriptors (watch.lucb): POLLIN, POLLOUT or both.
+        for slot in 0..<watched_count:
+            let entry = watched[slot]
+            fds[slot + 2] = PollFd(fd = (i32)entry.descriptor, events = (1 if entry.reads else 0) | (4 if entry.writes else 0), revents = 0)
+        _ = poll(&fds[0], (u64)watched_count + 2, milliseconds)
         var drained: u8[64]
         while read(x.wake_read, (void*)&drained[0], 64) > 0:
             continue

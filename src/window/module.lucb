@@ -117,6 +117,19 @@ pub struct Window:
             return x11_size(state)
         error(unsupported, "native windows are not implemented for this target")
 
+    ## Change the title-bar text; it must be valid UTF-8, like the title the window
+    ## opened with.
+    pub func set_title(title: str) -> !:
+        let state = try self.checked()
+        if not utf8.valid(title.bytes):
+            error(invalid_options, "the window title is not valid UTF-8")
+        if platform.macos and platform.arm64:
+            try mac_set_title(state, title)
+        if platform.windows:
+            try win_set_title(state, title)
+        if platform.linux:
+            try x11_retitle(state, title)
+
     ## Resize the content to `width` by `height` logical points.
     pub func resize(width: u32, height: u32) -> !:
         let state = try self.checked()
@@ -230,8 +243,9 @@ pub struct Window:
 
     ## Block until an event is queued or `timeout_ns` elapses, then behave like poll():
     ## return the oldest queued event, or none on a timeout or a spurious wake. A `wake()`
-    ## from another thread returns it promptly; 0 returns immediately, like poll(). The
-    ## loop re-evaluates and waits again on a none. Main thread only; poll() is unchanged.
+    ## from another thread, or a descriptor given to `watch` turning ready, returns it
+    ## promptly; 0 returns immediately, like poll(). The loop re-evaluates and waits again
+    ## on a none. Main thread only; poll() is unchanged.
     pub func wait(timeout_ns: u64) -> input.Event?!:
         let state = try self.checked()
         if let event = pop_event(state):
