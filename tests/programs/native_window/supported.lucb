@@ -15,9 +15,10 @@ func writer(context: void*?):
     var byte: u8 = 1
     assert(write(*(i32*)pointer, (const void*)&byte, 1) == 1)
 
-## Linux: a title change, and a watched pipe ending a wait once it is readable.
+## Linux: a non-ASCII title change (_NET_WM_NAME in UTF-8, WM_NAME in Latin-1), and
+## a watched pipe ending a wait once it is readable.
 func linux_window(surface: window.Window*) -> !:
-    try surface.set_title("Supported target — retitled")
+    try surface.set_title("Supported target — retitled, café 日本")
     var ends: i32[2] = [0, 0]
     assert(pipe(&ends[0]) == 0)
     defer _ = close_descriptor(ends[0])
@@ -47,5 +48,6 @@ pub func main(arguments: str[]) -> i32!:
     defer surface.destroy()
     if platform.linux:
         try linux_window(&surface)
-    print("ok supported window target")
+    # A distinct line, so a gate that needs a real window can tell it from a refusal.
+    print("ok supported window target (opened)")
     return 0

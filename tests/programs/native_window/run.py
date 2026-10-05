@@ -3,7 +3,8 @@
 
 All generated files live in a temporary directory. LUCE_TEST_WINDOW=required
 runs the GUI checks; optional runs them when a desktop is available, otherwise
-records the missing coverage. off explicitly runs only non-GUI contracts.
+records the missing coverage. off explicitly runs only non-GUI contracts. On
+Linux, required with DISPLAY set demands that the X11 window really opens.
 """
 from pathlib import Path
 import ctypes
@@ -66,8 +67,19 @@ def main():
             other = 'supported' if backend else 'unsupported'
             entry = work / ('probe.lucb' if mac else other + '.lucb')
             run([str(COMPILER), 'build', str(entry), *flags, '-o', str(binary)])
-            expected = 'ok window contracts without WindowServer' if mac else f'ok {other} window target'
-            run([str(binary)], expected=expected)
+            if mac:
+                run([str(binary)], expected='ok window contracts without WindowServer')
+            elif other == 'unsupported':
+                run([str(binary)], expected='ok unsupported window target')
+            else:
+                # The probe says "(opened)" only when a real window opened; with a display
+                # and LUCE_TEST_WINDOW=required, a refused window fails the gate.
+                output = run([str(binary)]).strip()
+                opened = output == 'ok supported window target (opened)'
+                assert opened or output == 'ok supported window target', output
+                if policy == 'required' and os.environ.get('DISPLAY') and platform.system() == 'Linux':
+                    assert opened, 'LUCE_TEST_WINDOW=required with DISPLAY set, but no X11 window opened'
+                print(f'native_window {name}: ' + ('a window opened' if opened else 'no window (refused as unsupported)'), flush=True)
             if gui:
                 run([str(binary), 'gui'], expected='ok native window lifecycle, ABI, input, isolation, and overflow')
             if mac:

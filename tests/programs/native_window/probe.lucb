@@ -134,12 +134,20 @@ pub func main(arguments: str[]) -> i32!:
         let still_ready = time.now()
         _ = try first.wait(3600000000000)
         assert(time.since(still_ready) < 5000000000)
-        var drained: u8 = 0
-        assert(read(ends[0], (void*)&drained, 1) == 1)
+        # Unwatched, a pipe left readable no longer ends waits: over 50 ms they return
+        # only for the odd OS event, where a watch would return thousands of times.
         try window.unwatch(ends[0])
         let unwatched = time.now()
-        _ = try first.wait(50000000)
-        assert(time.since(unwatched) >= 40000000)
+        var returns = 0
+        while true:
+            let spent = time.since(unwatched)
+            if spent >= 50000000:
+                break
+            _ = try first.wait(50000000 - spent)
+            returns += 1
+        assert(returns < 20)
+        var drained: u8 = 0
+        assert(read(ends[0], (void*)&drained, 1) == 1)
         _ = close_descriptor(ends[0])
         _ = close_descriptor(ends[1])
         try flush(&first)

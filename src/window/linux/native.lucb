@@ -60,15 +60,44 @@ func x11_open(options: Options) -> State*!:
     _ = x.api.flush(x.display)
     return state
 
-## The title as _NET_WM_NAME (UTF-8) for current desktops and WM_NAME for the rest.
+## The title as _NET_WM_NAME (UTF8_STRING), the one current desktops show, and as
+## WM_NAME for the rest. ICCCM types WM_NAME's STRING as ISO 8859-1, so it gets the
+## Latin-1 transcoding (x11_latin1).
 func x11_set_title(x: X11Connection, window: u64, title: str) -> !:
     let text = try new u8[title.length + 1] ---
     defer free(text)
     for index in 0..<title.length:
         text[index] = title.bytes[index]
     text[title.length] = 0
-    _ = x.api.store_name(x.display, window, (c.str)text.data)
     _ = x.api.change_property(x.display, window, x.net_wm_name, x.utf8_string, 8, 0, text.data, (i32)title.length)
+    let length = x11_latin1(title, text)
+    text[length] = 0
+    _ = x.api.store_name(x.display, window, (c.str)text.data)
+
+## Transcode valid UTF-8 `text` to ISO 8859-1 in `output` (at least as long): each
+## character below U+0100 becomes its byte, any other a '?'. Returns the length.
+func x11_latin1(text: str, output: u8[]) -> usize:
+    var length: usize = 0
+    var index: usize = 0
+    while index < text.length:
+        let lead = text.bytes[index]
+        var size: usize = 1
+        if lead >= 0xF0:
+            size = 4
+        elif lead >= 0xE0:
+            size = 3
+        elif lead >= 0xC0:
+            size = 2
+        if size == 1:
+            output[length] = lead
+        elif size == 2 and lead <= 0xC3:
+            # U+0080..U+00FF: two bytes, 110000xx 10xxxxxx.
+            output[length] = (lead - 0xC0) * 64 + (text.bytes[index + 1] - 0x80)
+        else:
+            output[length] = '?'
+        length += 1
+        index += size
+    return length
 
 func x11_retitle(state: State*, title: str) -> !:
     let x = try x11_connect()
@@ -230,3 +259,11 @@ func x11_free(state: State*):
             _ = x.api.free_cursor(x.display, state.x_cursor)
         _ = x.api.flush(x.display)
     free(state) in memory.heap
+
+test "an X11 WM_NAME title is the UTF-8 title in Latin-1, with '?' beyond it":
+    var output: u8[32]
+    let length = x11_latin1("Abé — ÿ日😀", output[..<32])
+    assert(length == 9)
+    var expected: u8[9] = ['A', 'b', 0xE9, ' ', '?', ' ', 0xFF, '?', '?']
+    for index in 0..<length:
+        assert(output[index] == expected[index])
