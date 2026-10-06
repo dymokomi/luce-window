@@ -1,0 +1,24 @@
+# What the gate runs on each platform (luce-base tools/gate.py, docs/CI.md): bash commands
+# in this checkout, in order, beside its dependencies at main, with LUCE_BASE and LUCE
+# naming the toolchain the gate built.
+
+[macos]
+steps = [
+    "./test.sh",
+]
+
+[linux]
+steps = [
+    "./test.sh",
+]
+
+[windows]
+steps = [
+    # module tests through both backends
+    "python tests/run.py --base ../luce-base/build/luce-base.exe --skip-programs",
+    # windows contracts
+    """
+    python tools/test_windows_native.py --compiler ../luce-base/build/luce-base.exe
+    python tools/test_window_targets.py --compiler ../luce-base/build/luce-base.exe
+    """,
+]
