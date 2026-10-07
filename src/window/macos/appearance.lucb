@@ -4,10 +4,12 @@
 #
 #   DESCRIPTION:
 #       The setting is the global AppleInterfaceStyle default: "Dark" in dark mode, absent in
-#       light mode (System Settings keeps it current in Auto mode too). NSApp's
-#       effectiveAppearance is not used: AppKit resolves it to aqua for any program whose
-#       Mach-O header names no SDK, which Luce's linker leaves out, so it would always say
-#       light. A change is announced by the distributed notification
+#       light mode (System Settings keeps it current in Auto mode too). It is read rather
+#       than NSApp's effectiveAppearance because it answers before AppKit runs (no window
+#       open) and already holds the new value when the notification arrives; Luce programs
+#       set no per-app appearance for effectiveAppearance to add. (effectiveAppearance
+#       answers aqua for a program whose LC_BUILD_VERSION names no SDK; luce-base's link
+#       names one.) A change is announced by the distributed notification
 #       AppleInterfaceThemeChangedNotification, which each window's delegate observes; the
 #       observer queues the event and wakes a wait() in progress.
 #

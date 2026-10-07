@@ -29,7 +29,7 @@ if event.kind == input.EventKind.appearance_changed:
 
 Where each platform keeps the setting:
 
-- macOS: the global `AppleInterfaceStyle` default (`"Dark"`, or absent for light), and the distributed notification `AppleInterfaceThemeChangedNotification` for changes. NSApp's `effectiveAppearance` is not used: AppKit reports aqua for every program whose Mach-O header names no SDK version, and Luce's linker writes none.
+- macOS: the global `AppleInterfaceStyle` default (`"Dark"`, or absent for light), and the distributed notification `AppleInterfaceThemeChangedNotification` for changes. The default is read rather than NSApp's `effectiveAppearance` because it answers before AppKit is running (`window.appearance()` with no window open) and the moment the notification arrives; Luce programs set no per-app appearance for `effectiveAppearance` to add.
 - Windows: `AppsUseLightTheme` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize` (0 is dark), re-read on `WM_SETTINGCHANGE`.
 - Linux: the XDG desktop portal's `org.freedesktop.appearance` `color-scheme` (1 prefers dark; 2 and 0, no preference, are light), read over the session D-Bus and followed through the portal's `SettingChanged` signal. libdbus-1 is loaded at run time; without it, a session bus or the portal, the appearance is light.
 
