@@ -44,7 +44,7 @@ Native libraries it links, by platform (declared in `package.prisma`, linked onl
 
 ## Tests
 
-`./test.sh` runs every module's `test` blocks and the unit tests through the native and C backends, then the program checks under `tests/programs`. It expects the compiler beside this checkout at `../luce-base/build/luce-base` (or `--base PATH`).
+`luc test` runs every module's `test` blocks and two test programs: `tests/native_window` (real AppKit windows when a desktop session is there, the X11 or Win32 backend elsewhere; `LUCE_TEST_WINDOW=required|optional|off`) and `tests/window_targets` (each target's assembly calls only its own host's API). On Windows, `python tools/test_windows_native.py` runs the Win32 contracts under `tests/windows` by hand.
 
 ## License
 

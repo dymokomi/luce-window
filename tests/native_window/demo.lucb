@@ -1,3 +1,5 @@
+## A demonstration to run by hand (luce-base build tests/native_window/demo.lucb): a
+## native window that draws nothing, closed by Escape or its title-bar button.
 from luce_window import input, window
 import thread
 

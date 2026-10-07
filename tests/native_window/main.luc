@@ -1,0 +1,83 @@
+# luce-window against real AppKit objects (macOS), the X11 or Win32 backend (Linux and
+# Windows), or a refusal (any other host). The Base programs beside this one are built with
+# LUCE_BASE and run as their own processes:
+#   probe.lucb        macOS: the contracts without WindowServer, then with `gui` a window's
+#                     lifecycle, ABI, input, isolation and overflow, when a desktop is there
+#   supported.lucb    Linux and Windows: opens a window when it can, else refuses cleanly
+#   unsupported.lucb  any other host refuses a window
+# LUCE_TEST_WINDOW=required demands the GUI checks (on Linux with DISPLAY, a real X11
+# window), optional (the default) runs them when a desktop is there, off skips them.
+# demo.lucb is a demonstration to run by hand.
+from luce_std import files, paths, process
+import platform
+
+let failed = ErrorCode.package(1)
+
+# Run `program`, failing unless it exits 0; its output, trimmed.
+func run(program: str, arguments: list[str]) -> str!:
+    let done = process.run(program, arguments)
+    if done.exit_code != 0:
+        error(failed, f"{program} {arguments}: exit status {done.exit_code}\n{done.output}{done.error_output}")
+    return done.output.trim()
+
+func expect(program: str, arguments: list[str], wanted: str) -> unit!:
+    let output = run(program, arguments)
+    if output != wanted:
+        error(failed, f"{program} {arguments}: printed [{output}], wanted [{wanted}]")
+
+# A logged-in desktop session: launchd's manager is Aqua there, and Background over SSH.
+func desktop() -> bool:
+    let done = process.run("launchctl", ["managername"]) catch failure:
+        return false
+    return done.output.trim() == "Aqua"
+
+pub func main(arguments: list[str]) -> int!:
+    let base = process.variable("LUCE_BASE") else "luce-base"
+    let here = process.variable("LUC_TEST_DIR") else "tests/native_window"
+    let policy = process.variable("LUCE_TEST_WINDOW") else "optional"
+    if policy != "required" and policy != "optional" and policy != "off":
+        error(failed, "LUCE_TEST_WINDOW must be required, optional, or off")
+    let gui = platform.macos and policy != "off" and desktop()
+    if platform.macos and policy == "required" and not gui:
+        error(failed, "native window tests require a logged-in macOS desktop")
+    let work = paths.join(process.current_directory(), "build/tests/native_window/work")
+    files.ensure_directory(work)
+    let entry = "probe.lucb" if platform.macos else ("supported.lucb" if platform.linux or platform.windows else "unsupported.lucb")
+    let binary = paths.join(work, "window")
+    _ = run(base, ["build", paths.join(here, entry), "-o", binary])
+    if platform.macos:
+        expect(binary, [], "ok window contracts without WindowServer")
+        if gui:
+            expect(binary, ["gui"], "ok native window lifecycle, ABI, input, isolation, and overflow")
+        if "SDL" in run("otool", ["-L", binary]):
+            error(failed, "native window linked SDL")
+        print("ok native window" + (" (GUI)" if gui else " (contracts; no desktop session, or LUCE_TEST_WINDOW=off)"))
+    elif platform.linux or platform.windows:
+        # the probe says "(opened)" only when a real window opened
+        let output = run(binary, [])
+        let opened = output == "ok supported window target (opened)"
+        if not opened and output != "ok supported window target":
+            error(failed, f"supported: printed [{output}]")
+        if policy == "required" and platform.linux and (process.variable("DISPLAY") else "") != "" and not opened:
+            error(failed, "LUCE_TEST_WINDOW=required with DISPLAY set, but no X11 window opened")
+        print("ok native window: " + ("a window opened" if opened else "no window (refused as unsupported)"))
+    else:
+        expect(binary, [], "ok unsupported window target")
+    input_only(base, work)
+    files.remove_tree(work)
+    return 0
+
+# A portable input-only program acquires no AppKit linkage.
+func input_only(base: str, work: str) -> unit!:
+    let project = paths.join(work, "input_only")
+    files.ensure_directory(project)
+    let root = process.current_directory()
+    files.write_text(paths.join(project, "package.prisma"), f"#prisma 4.0\ndef package \"input_only\" {{\n    def dependency \"luce-window\" {{\n        str owner = \"dymokomi\"\n        str path = \"{root}\"\n    }}\n}}\n")
+    files.write_text(paths.join(project, "input_only.lucb"), "from luce_window import input\npub func main(arguments: str[]) -> i32:\n    _ = arguments\n    assert((u16)input.Key.a == 4)\n    return 0\n")
+    let binary = paths.join(project, "input-only")
+    _ = run(base, ["build", paths.join(project, "input_only.lucb"), "-o", binary])
+    _ = run(binary, [])
+    if platform.macos:
+        let linked = run("otool", ["-L", binary])
+        if "AppKit" in linked or "SDL" in linked:
+            error(failed, f"an input-only program links {linked}")

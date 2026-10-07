@@ -1,0 +1,23 @@
+## The window API's target probe: every call whose native side differs by host, built as
+## assembly by main.luc for each target (never run).
+from luce_window import window, input
+import platform
+pub func main(arguments: str[]) -> i32!:
+    var host = try window.Window.open(window.Options(title = "Input target contract"))
+    defer host.destroy()
+    try host.set_text_input(true)
+    try host.set_text_input(false)
+    try host.set_cursor(input.Cursor.text)
+    try host.set_cursor(input.Cursor.resize_horizontal)
+    assert((try host.cursor()) == input.Cursor.resize_horizontal)
+    try host.set_title("Retitled — 日本語")
+    try window.watch((platform.SocketDescriptor)0, window.Interest.both)
+    _ = try host.wait(1000000)
+    try window.unwatch((platform.SocketDescriptor)0)
+    try window.wake()
+    var lease = try host.acquire_presentation()
+    defer lease.destroy()
+    if platform.linux:
+        _ = try lease.x11_display()
+        _ = try lease.x11_window()
+    return 0

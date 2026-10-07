@@ -1,0 +1,12 @@
+#prisma 4.0
+def package "window-targets-probe" {
+    def dependency "luce-window" {
+        str owner = "dymokomi"
+        str path = "../.."
+    }
+
+    def dependency "luce-std" {
+        str owner = "dymokomi"
+        str path = "../../../luce-std"
+    }
+}

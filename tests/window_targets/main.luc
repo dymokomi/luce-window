@@ -1,0 +1,55 @@
+# The public window API (text input, cursors, titles, waits, watches, wake, pens) emits only
+# the selected host's native calls: probe.lucb beside this file, a package of its own that
+# depends on this one, built as assembly for each target at levels 0 and 3.
+from luce_std import files, paths, process
+
+let failed = ErrorCode.package(1)
+
+pub func main(arguments: list[str]) -> int!:
+    let base = process.variable("LUCE_BASE") else "luce-base"
+    let here = process.variable("LUC_TEST_DIR") else "tests/window_targets"
+    let work = "build/tests/window_targets"
+    files.ensure_directory(work)
+    let objective_c = ["objc_msgSend", "sel_registerName", "objc_getClass"]
+    let win32 = ["CreateWindowExW", "DefWindowProcW", "GetModuleHandleW", "LoadCursorW", "SetCursor", "GetCursorPos",
+                 "MsgWaitForMultipleObjectsEx", "PostThreadMessageW", "WSAEventSelect", "kevent"]
+    # wait/wake emit the host's own blocking pump and thread-safe post
+    let macos_needs = ["nextEventMatchingMask", "postEvent:atStart:", "dateWithTimeIntervalSinceNow:", "setTitle:",
+                       "kqueue", "kevent", "CFFileDescriptorCreate", "CFFileDescriptorEnableCallBacks",
+                       "tabletProximity:", "tangentialPressure", "pointingDeviceType"]
+    let windows_needs = ["MsgWaitForMultipleObjectsEx", "PostThreadMessageW", "GetPointerPenInfo", "GetPointerPenInfoHistory",
+                         "SetWindowTextW", "WSAEventSelect", "WSAPoll", "WSAResetEvent"]
+    # Linux loads Xlib at run time and blocks in poll() on the display and a wake pipe
+    let linux_needs = ["libX11.so.6", "XOpenDisplay", "XCreateSimpleWindow", "Xutf8LookupString", "dlopen", "pipe2", "poll",
+                       "libXi.so.6", "XISelectEvents", "XGetEventData"]
+    for target in ["arm64-macos", "x86_64-windows", "x86_64-linux"]:
+        for level in ["0", "3"]:
+            let output = paths.join(work, f"{target}-{level}.s")
+            let built = process.run(base, ["build", paths.join(here, "probe.lucb"), "--target", target, "--native", "--opt", level, "--emit=asm", "-o", output])
+            if built.exit_code != 0:
+                error(failed, f"{target} --opt {level}: the build failed\n{built.output}{built.error_output}")
+            let assembly = files.read_text(output, 1073741824)
+            # fresh lists each time: a list is shared, not copied, by assignment
+            var absent: list[str] = []
+            var present: list[str] = []
+            if target.ends_with("macos"):
+                present = macos_needs
+            else:
+                for symbol in objective_c:
+                    absent.append(symbol)
+            if target.ends_with("windows"):
+                present = windows_needs
+            if target.ends_with("linux"):
+                present = linux_needs
+                for symbol in win32:
+                    absent.append(symbol)
+            else:
+                absent.append("libX11.so.6")
+                absent.append("XOpenDisplay")
+            for symbol in absent:
+                if symbol in assembly:
+                    error(failed, f"{target} --opt {level} names {symbol}")
+            for symbol in present:
+                if not (symbol in assembly):
+                    error(failed, f"{target} --opt {level} lacks {symbol}")
+    return 0
