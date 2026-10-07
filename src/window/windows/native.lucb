@@ -115,6 +115,7 @@ func win_open(options: Options) -> State*!:
     let native = CreateWindowExW(0, &win_class_name[0], title.data, style, -2147483648, -2147483648,
                                  rect.right - rect.left, rect.bottom - rect.top, none, none, GetModuleHandleW(none), (void*)state) else error(failed, "the native window could not be created")
     state.native = native
+    state.shown_appearance = win_system_appearance()
     try win_register_drops(state)
     return state
 

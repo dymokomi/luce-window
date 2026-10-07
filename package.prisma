@@ -19,6 +19,6 @@ def package "luce-window" {
     }
 
     def native "windows" {
-        str[] libraries = ["user32", "ole32", "shell32", "ws2_32"]
+        str[] libraries = ["user32", "ole32", "shell32", "ws2_32", "advapi32"]
     }
 }

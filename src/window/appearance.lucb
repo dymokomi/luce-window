@@ -1,0 +1,43 @@
+#==============================================================================================
+#
+#   appearance - The system's light or dark appearance
+#
+#   DESCRIPTION:
+#       Each OS keeps the setting somewhere of its own: AppKit's NSAppearance on macOS, the
+#       AppsUseLightTheme registry value on Windows, and the XDG desktop portal's
+#       org.freedesktop.appearance color-scheme on Linux. The values each one stores map
+#       here; reading and watching them is each backend's.
+#
+#==============================================================================================
+
+## The system's appearance, before any window opens or apart from one: what CSS's
+## `prefers-color-scheme` reads. Light where the system offers no setting (an X11
+## desktop without the XDG portal, an older Windows). Main thread only.
+pub func appearance() -> input.Appearance!:
+    try check_thread()
+    if platform.macos and platform.arm64:
+        return try mac_system_appearance()
+    if platform.windows:
+        return win_system_appearance()
+    if platform.linux:
+        return linux_system_appearance()
+    return input.Appearance.light
+
+## The portal's color-scheme: 1 prefers dark, 2 prefers light, 0 states no preference,
+## which applications show as light.
+func portal_appearance(scheme: u32) -> input.Appearance:
+    return input.Appearance.dark if scheme == 1 else input.Appearance.light
+
+## Windows' AppsUseLightTheme: 0 asks applications for dark, any other value for light.
+func registry_appearance(apps_use_light_theme: u32) -> input.Appearance:
+    return input.Appearance.dark if apps_use_light_theme == 0 else input.Appearance.light
+
+test "the portal's color-scheme maps to an appearance":
+    assert(portal_appearance(0) == input.Appearance.light)
+    assert(portal_appearance(1) == input.Appearance.dark)
+    assert(portal_appearance(2) == input.Appearance.light)
+    assert(portal_appearance(7) == input.Appearance.light)
+
+test "Windows' AppsUseLightTheme maps to an appearance":
+    assert(registry_appearance(0) == input.Appearance.dark)
+    assert(registry_appearance(1) == input.Appearance.light)

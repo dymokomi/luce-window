@@ -1,6 +1,6 @@
 # luce-window
 
-Native desktop windows for Luce: open, title and size a window, full screen, cursors, text input with the platform input method, keyboard, pointer, touchpad and pen events (pressure, tilt, azimuth and altitude, barrel rotation, the airbrush wheel, eraser versus tip, pen versus mouse versus touch on all three platforms: [docs/PEN.md](docs/PEN.md)), and files dragged in from other applications (`drag_entered`, `drag_moved`, `drag_left`, `drop`; `Window.drop_paths`, `Window.set_drop_accepted`).
+Native desktop windows for Luce: open, title and size a window, full screen, cursors, text input with the platform input method, keyboard, pointer, touchpad and pen events (pressure, tilt, azimuth and altitude, barrel rotation, the airbrush wheel, eraser versus tip, pen versus mouse versus touch on all three platforms: [docs/PEN.md](docs/PEN.md)), files dragged in from other applications (`drag_entered`, `drag_moved`, `drag_left`, `drop`; `Window.drop_paths`, `Window.set_drop_accepted`), and the system's light or dark appearance.
 
 ## Modules
 
@@ -17,6 +17,21 @@ Native desktop windows for Luce: open, title and size a window, full screen, cur
 - A descriptor given to `window.watch(descriptor, window.Interest.readable)` (or `.writable`, `.both`) turning ready, so a program with sockets open (a browser loading pages) needn't wake on a short timer to poll them. `wait` only returns; find which descriptor is ready with a zero-deadline poll or nonblocking I/O. Readiness is level-triggered, as with `poll`: a descriptor left ready ends every wait until it is read, written or unwatched (`window.unwatch(descriptor)`, before closing it). Up to 64 descriptors.
 
 Each platform adds them to its own wait: `poll` beside the X connection on Linux, a kqueue the main run loop watches on macOS, and a `WSAEventSelect` event beside the message queue on Windows. Sockets and pipes can be watched; on Windows only sockets, which watching makes nonblocking.
+
+## Light and dark
+
+`window.appearance()` returns `input.Appearance.light` or `.dark`: the user's system-wide choice, the same setting CSS reads as `prefers-color-scheme` and AppKit as NSAppearance. It works before any window opens. `Window.appearance()` gives the same answer for an open window, and when the user switches, `poll` and `wait` deliver an `appearance_changed` event whose `appearance` field holds the new value, so a loop handles it like `resized`:
+
+```
+if event.kind == input.EventKind.appearance_changed:
+    restyle(event.appearance)
+```
+
+Where each platform keeps the setting:
+
+- macOS: the global `AppleInterfaceStyle` default (`"Dark"`, or absent for light), and the distributed notification `AppleInterfaceThemeChangedNotification` for changes. NSApp's `effectiveAppearance` is not used: AppKit reports aqua for every program whose Mach-O header names no SDK version, and Luce's linker writes none.
+- Windows: `AppsUseLightTheme` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize` (0 is dark), re-read on `WM_SETTINGCHANGE`.
+- Linux: the XDG desktop portal's `org.freedesktop.appearance` `color-scheme` (1 prefers dark; 2 and 0, no preference, are light), read over the session D-Bus and followed through the portal's `SettingChanged` signal. libdbus-1 is loaded at run time; without it, a session bus or the portal, the appearance is light.
 
 ## Using it
 
@@ -35,16 +50,16 @@ def dependency "luce-window" {
 
 ## Platforms
 
-macOS (AppKit), Windows (Win32, OLE drag and drop) and Linux (X11 through Xlib, loaded at run time so no development packages are needed; it runs under Wayland desktops through XWayland; no drag and drop yet; pens through XInput 2, with libXi loaded at run time too).
+macOS (AppKit), Windows (Win32, OLE drag and drop) and Linux (X11 through Xlib, loaded at run time so no development packages are needed; it runs under Wayland desktops through XWayland; no drag and drop yet; pens through XInput 2, with libXi loaded at run time too; the appearance through libdbus-1, also loaded at run time).
 
 Native libraries it links, by platform (declared in `package.prisma`, linked only when the program reaches code that needs them):
 
 - macos: objc, AppKit, Foundation, CoreFoundation
-- windows: user32, ole32, shell32, ws2_32
+- windows: user32, ole32, shell32, ws2_32, advapi32
 
 ## Tests
 
-`luc test` runs every module's `test` blocks and two test programs: `tests/native_window` (real AppKit windows when a desktop session is there, the X11 or Win32 backend elsewhere; `LUCE_TEST_WINDOW=required|optional|off`) and `tests/window_targets` (each target's assembly calls only its own host's API). On Windows, `python tools/test_windows_native.py` runs the Win32 contracts under `tests/windows` by hand.
+`luc test` runs every module's `test` blocks and three test programs: `tests/native_window` (real AppKit windows when a desktop session is there, the X11 or Win32 backend elsewhere; `LUCE_TEST_WINDOW=required|optional|off`), `tests/window_targets` (each target's assembly calls only its own host's API) and `tests/appearance` (reads the system's appearance, and with a desktop checks an open window agrees; `probe.lucb watch SECONDS` prints changes while you switch the setting by hand). On Windows, `python tools/test_windows_native.py` runs the Win32 contracts under `tests/windows` by hand.
 
 ## License
 

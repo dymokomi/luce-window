@@ -1,0 +1,39 @@
+# The OS's light or dark appearance read for real: probe.lucb beside this file, built with
+# LUCE_BASE and run as its own process. Without a desktop it reads the setting only; with one
+# (a logged-in macOS session, an X11 DISPLAY, Windows) it also opens a window and checks the
+# window answers the same. LUCE_TEST_WINDOW=off skips the window.
+from luce_std import files, paths, process
+import platform
+
+let failed = ErrorCode.package(1)
+
+func run(program: str, arguments: list[str]) -> str!:
+    let done = process.run(program, arguments)
+    if done.exit_code != 0:
+        error(failed, f"{program} {arguments}: exit status {done.exit_code}\n{done.output}{done.error_output}")
+    return done.output.trim()
+
+# A logged-in desktop: launchd's manager is Aqua there (Background over SSH); an X11 DISPLAY.
+func desktop() -> bool:
+    if platform.macos:
+        let done = process.run("launchctl", ["managername"]) catch failure:
+            return false
+        return done.output.trim() == "Aqua"
+    if platform.linux:
+        return (process.variable("DISPLAY") else "") != ""
+    return platform.windows
+
+pub func main(arguments: list[str]) -> int!:
+    let base = process.variable("LUCE_BASE") else "luce-base"
+    let here = process.variable("LUC_TEST_DIR") else "tests/appearance"
+    let policy = process.variable("LUCE_TEST_WINDOW") else "optional"
+    let work = paths.join(process.current_directory(), "build/tests/appearance")
+    files.ensure_directory(work)
+    let binary = paths.join(work, "appearance")
+    _ = run(base, ["build", paths.join(here, "probe.lucb"), "-o", binary])
+    let output = run(binary, ["gui"] if policy != "off" and desktop() else [])
+    if not output.starts_with("ok appearance light") and not output.starts_with("ok appearance dark"):
+        error(failed, f"the probe printed [{output}]")
+    print(output)
+    files.remove_tree(work)
+    return 0

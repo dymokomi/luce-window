@@ -1,0 +1,38 @@
+from luce_window import input, window
+import platform
+import time
+
+func name(appearance: input.Appearance) -> str:
+    return "dark" if appearance == input.Appearance.dark else "light"
+
+## `probe` prints the system's appearance. `probe gui` also opens a window and checks it
+## answers the same (on macOS, AppKit's answer against the AppleInterfaceStyle default
+## read before AppKit ran). `probe watch SECONDS` then prints every appearance_changed
+## event, for checking a change by hand.
+pub func main(arguments: str[]) -> i32!:
+    let system = try window.appearance()
+    if arguments.length < 2:
+        print(f"ok appearance {name(system)}")
+        return 0
+    var surface = window.Window.open(window.Options(title = "Appearance", width = 320, height = 240)) catch failure:
+        assert(failure.code == window.unsupported)
+        print(f"ok appearance {name(system)} (no window)")
+        return 0
+    defer surface.destroy()
+    let shown = try surface.appearance()
+    assert(shown == system)
+    assert((try window.appearance()) == system)
+    if arguments[1] == "watch" and arguments.length > 2:
+        var seconds: u64 = 0
+        for byte in arguments[2].bytes:
+            seconds = seconds * 10 + (u64)(byte - '0')
+        try surface.show()
+        let started = time.now()
+        let budget = seconds * 1000000000
+        while time.since(started) < budget:
+            # One long wait: a change must end it, not a timeout.
+            if let event = try surface.wait(budget - time.since(started)):
+                if event.kind == input.EventKind.appearance_changed:
+                    print(f"changed {name(event.appearance)} at {time.since(started) // 1000000} ms (window {name(try surface.appearance())}, system {name(try window.appearance())})")
+    print(f"ok appearance {name(system)} (window agrees)")
+    return 0

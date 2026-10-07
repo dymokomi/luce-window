@@ -57,6 +57,14 @@ pub enum EventKind as u8:
     drag_left = 19
     ## The files were dropped at `x`, `y`.
     drop = 20
+    ## The window's light or dark appearance changed; `appearance` holds the new one.
+    appearance_changed = 21
+
+## Whether the OS draws light or dark: the setting CSS reads as `prefers-color-scheme`
+## and AppKit as NSAppearance (aqua or darkAqua).
+pub enum Appearance as u8:
+    light = 0
+    dark = 1
 
 ## USB HID keyboard-page usages, independent of the host's virtual key numbers.
 ## Unknown or unsupported positions produce unknown rather than a guessed key.
@@ -222,6 +230,8 @@ pub struct Event:
     pub var rotation: f64
     ## The airbrush finger wheel, -1..1 with 0 at rest (an airbrush reads 0..1).
     pub var tangential: f64
+    ## The new appearance, for appearance_changed events.
+    pub var appearance: Appearance
 
 # mark: Pen geometry ==========================================================================
 

@@ -195,6 +195,13 @@ pub struct Window:
         let state = try self.checked()
         state.drop_accepted = accepted
 
+    ## Whether this window shows light or dark: the system's setting (`window.appearance`),
+    ## which CSS reads as `prefers-color-scheme`. When it changes, `poll` and `wait`
+    ## deliver an appearance_changed event carrying the new one.
+    pub func appearance() -> input.Appearance!:
+        _ = try self.checked()
+        return try appearance()
+
     ## The window's current cursor.
     pub func cursor() -> input.Cursor!:
         return (try self.checked()).cursor

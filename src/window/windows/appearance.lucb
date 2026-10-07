@@ -1,0 +1,33 @@
+#==============================================================================================
+#
+#   appearance - Light or dark on Windows
+#
+#   DESCRIPTION:
+#       Settings > Personalization > Colors > "Choose your app mode" stores the
+#       AppsUseLightTheme DWORD under HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\
+#       Personalize. Windows broadcasts WM_SETTINGCHANGE with lParam "ImmersiveColorSet" to
+#       every top-level window when it changes; the window procedure reads the value again
+#       on any WM_SETTINGCHANGE and queues an event only when the appearance differs.
+#
+#==============================================================================================
+
+extern func RegGetValueW(key: void*, subkey: const u16*, value: const u16*, flags: u32, kind: u32*?, data: void*?, size: u32*?) -> i32
+
+## The setting, or light where it is missing (Windows before 10 1809).
+func win_system_appearance() -> input.Appearance:
+    var subkey: u16[64]
+    var name: u16[24]
+    win_ascii("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", subkey[..<64])
+    win_ascii("AppsUseLightTheme", name[..<24])
+    var value: u32 = 1
+    var size: u32 = 4
+    # HKEY_CURRENT_USER; RRF_RT_REG_DWORD.
+    if RegGetValueW((void*)(usize)0x80000001, &subkey[0], &name[0], 0x10, none, (void*)&value, &size) != 0:
+        return input.Appearance.light
+    return registry_appearance(value)
+
+## `text`, ASCII, as NUL-terminated UTF-16 in `output`, which must be longer.
+func win_ascii(text: str, output: u16[]):
+    for index in 0..<text.length:
+        output[index] = (u16)text.bytes[index]
+    output[text.length] = 0

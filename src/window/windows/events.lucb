@@ -101,6 +101,10 @@ func win_callback(native: void*, message: u32, word: usize, value: isize) -> isi
     if message == 16:
         state.close_requested = true
         return 0
+    if message == 26:
+        # WM_SETTINGCHANGE: "ImmersiveColorSet" when the app mode changed, among others.
+        note_appearance(state, win_system_appearance())
+        return DefWindowProcW(native, message, word, value)
     if message == 5:
         push_event(state, input.Event(kind = input.EventKind.resized))
         invoke_redraw(state)

@@ -54,6 +54,7 @@ func x11_open(options: Options) -> State*!:
     if let im = x.im:
         # XIMPreeditNothing | XIMStatusNothing: composed text arrives committed.
         state.x_ic = x.api.create_ic(im, "inputStyle", 0x0008 | 0x0400, "clientWindow", window, none)
+    state.shown_appearance = linux_system_appearance()
     x11_windows[slot] = state
     x11_pen_select(x.display, window)
     try x11_set_cursor(state, input.Cursor.arrow)
@@ -186,6 +187,9 @@ func math_round(value: f64) -> f64:
 ## Translate queued X events into their windows' queues, stopping once `waiting` has one.
 func x11_pump(waiting: State*):
     let x = x11_connection else return
+    # The portal's appearance signals, on the session bus (linux/appearance.lucb).
+    if dbus_drain():
+        linux_announce_appearance()
     var event: XEventBuffer
     var count: usize = 0
     while count < 256 and x.api.pending(x.display) > 0:
@@ -210,14 +214,20 @@ func x11_wait(waiting: State*, timeout_ns: u64):
     if x.api.pending(x.display) == 0:
         let ms64 = (timeout_ns + 999999) // 1000000
         let milliseconds: i32 = -1 if ms64 >= 0x7FFFFFFF else (i32)ms64
-        var fds: PollFd[66]
+        var fds: PollFd[67]
         fds[0] = PollFd(fd = x.api.connection_number(x.display), events = 1, revents = 0)
         fds[1] = PollFd(fd = x.wake_read, events = 1, revents = 0)
         # The watched descriptors (watch.lucb): POLLIN, POLLOUT or both.
         for slot in 0..<watched_count:
             let entry = watched[slot]
             fds[slot + 2] = PollFd(fd = (i32)entry.descriptor, events = (1 if entry.reads else 0) | (4 if entry.writes else 0), revents = 0)
-        _ = poll(&fds[0], (u64)watched_count + 2, milliseconds)
+        var count = (u64)watched_count + 2
+        # The session bus, for the portal's appearance signals.
+        let bus = dbus_descriptor()
+        if bus >= 0:
+            fds[count] = PollFd(fd = bus, events = 1, revents = 0)
+            count += 1
+        _ = poll(&fds[0], count, milliseconds)
         var drained: u8[64]
         while read(x.wake_read, (void*)&drained[0], 64) > 0:
             continue

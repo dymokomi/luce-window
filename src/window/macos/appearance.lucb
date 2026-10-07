@@ -1,0 +1,63 @@
+#==============================================================================================
+#
+#   appearance - Light or dark on macOS
+#
+#   DESCRIPTION:
+#       The setting is the global AppleInterfaceStyle default: "Dark" in dark mode, absent in
+#       light mode (System Settings keeps it current in Auto mode too). NSApp's
+#       effectiveAppearance is not used: AppKit resolves it to aqua for any program whose
+#       Mach-O header names no SDK, which Luce's linker leaves out, so it would always say
+#       light. A change is announced by the distributed notification
+#       AppleInterfaceThemeChangedNotification, which each window's delegate observes; the
+#       observer queues the event and wakes a wait() in progress.
+#
+#==============================================================================================
+
+extern func msg_observe_name as "objc_msgSend"(object: void*, selector: void*, observer: void*, callback: void*, name: void*, sender: void*?)
+
+## A new NSString holding `text`, released by the caller.
+func mac_string(text: str) -> void*!:
+    let allocated = msg_ptr(try native_class("NSString"), sel("alloc")) else error(failed, "could not allocate a string")
+    # initWithBytes:length:encoding: with NSUTF8StringEncoding (4).
+    return msg_init_text(allocated, sel("initWithBytes:length:encoding:"), text.bytes.data, text.length, 4) else error(failed, "could not initialize a string")
+
+func mac_system_appearance() -> input.Appearance!:
+    let pool = objc_autoreleasePoolPush()
+    defer objc_autoreleasePoolPop(pool)
+    let defaults = msg_ptr(try native_class("NSUserDefaults"), sel("standardUserDefaults")) else return input.Appearance.light
+    let key = try mac_string("AppleInterfaceStyle")
+    defer msg_void(key, sel("release"))
+    let style = msg_one_object(defaults, sel("stringForKey:"), key) else return input.Appearance.light
+    let dark = try mac_string("Dark")
+    defer msg_void(dark, sel("release"))
+    return input.Appearance.dark if msg_bool_object(style, sel("isEqualToString:"), dark) else input.Appearance.light
+
+## Observe the system's theme notification with the window's delegate.
+func mac_observe_appearance(state: State*) -> !:
+    let pool = objc_autoreleasePoolPush()
+    defer objc_autoreleasePoolPop(pool)
+    state.shown_appearance = try mac_system_appearance()
+    let center = msg_ptr(try native_class("NSDistributedNotificationCenter"), sel("defaultCenter")) else error(failed, "AppKit has no distributed notification center")
+    let name = try mac_string("AppleInterfaceThemeChangedNotification")
+    defer msg_void(name, sel("release"))
+    msg_observe_name(center, sel("addObserver:selector:name:object:"), required(state.delegate), sel("luceAppearanceChanged:"), name, none)
+
+func mac_forget_appearance(state: State*):
+    let delegate = state.delegate else return
+    let center_class = objc_getClass("NSDistributedNotificationCenter") else return
+    let center = msg_ptr(center_class, sel("defaultCenter")) else return
+    msg_object(center, sel("removeObserver:"), delegate)
+
+## luceAppearanceChanged: the system's theme changed. The notification arrives through the
+## run loop, not as an event, so a wait() in progress is woken to return the queued one.
+func appearance_callback(object: void*, selector: void*, notification: void*):
+    _ = selector
+    _ = notification
+    let state = get_state(object) else return
+    let now = mac_system_appearance() catch failure:
+        _ = failure
+        return
+    if now != state.shown_appearance:
+        note_appearance(state, now)
+        mac_wake() catch failure:
+            _ = failure

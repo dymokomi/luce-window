@@ -30,6 +30,8 @@ struct State:
     var move_y: i32
     var move_time: u32
     var cursor: input.Cursor
+    ## The appearance the window last reported, so a change is queued once.
+    var shown_appearance: input.Appearance
     ## macOS: whether the last proximity event brought the pen's eraser end near.
     var mac_eraser: bool
     var native_cursor: void*?
@@ -103,6 +105,13 @@ func push_event(state: State*, event: input.Event):
         state.overflowed = true
     state.events[(state.head + state.count) % state.events.length] = event
     state.count += 1
+
+## Queue appearance_changed when `now` differs from what the window last reported.
+func note_appearance(state: State*, now: input.Appearance):
+    if now == state.shown_appearance:
+        return
+    state.shown_appearance = now
+    push_event(state, input.Event(kind = input.EventKind.appearance_changed, appearance = now))
 
 func pop_event(state: State*) -> input.Event?:
     if state.close_requested:

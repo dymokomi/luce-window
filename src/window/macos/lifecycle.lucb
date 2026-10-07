@@ -35,6 +35,7 @@ func setup_classes() -> !:
         try add_method(native_type, "windowDidBecomeKey:", (void*)focus_callback, "v@:@")
         try add_method(native_type, "windowDidResignKey:", (void*)focus_callback, "v@:@")
         try add_method(native_type, "luceDidFinishLaunching:", (void*)launch_callback, "v@:@")
+        try add_method(native_type, "luceAppearanceChanged:", (void*)appearance_callback, "v@:@")
         objc_registerClassPair(native_type)
         delegate_class = native_type
     if view_class == none:
@@ -96,6 +97,7 @@ func mac_open(options: Options) -> State*!:
     state.delegate = delegate
     set_state(delegate, state)
     msg_object(native, sel("setDelegate:"), delegate)
+    try mac_observe_appearance(state)
     msg_bool_arg(native, sel("setAcceptsMouseMovedEvents:"), true)
     # Deliver every mouse-moved event rather than the OS-coalesced summary, so hover
     # feedback tracks a fast pointer instead of stepping between coarse samples.
@@ -255,6 +257,7 @@ func mac_destroy(state: State*):
     mac_clear_marked(state)
     if let view = state.view:
         set_state(view, none)
+    mac_forget_appearance(state)
     if let delegate = state.delegate:
         set_state(delegate, none)
     if let native = state.native:
