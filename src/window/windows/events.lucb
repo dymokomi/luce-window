@@ -106,7 +106,7 @@ func win_callback(native: void*, message: u32, word: usize, value: isize) -> isi
         note_appearance(state, win_system_appearance())
         return DefWindowProcW(native, message, word, value)
     if message == 5:
-        push_event(state, input.Event(kind = input.EventKind.resized))
+        note_resize(state)
         invoke_redraw(state)
     elif message == 7 or message == 8:
         state.pending_surrogate = 0
@@ -126,7 +126,7 @@ func win_callback(native: void*, message: u32, word: usize, value: isize) -> isi
     elif message == 736:
         let rect = (WinRect*)(void*)value
         _ = SetWindowPos(native, none, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, 20)
-        push_event(state, input.Event(kind = input.EventKind.resized))
+        note_resize(state)
         return 0
     elif message == 256 or message == 257 or message == 260 or message == 261:
         let key_modifiers = win_modifiers()

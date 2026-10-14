@@ -191,7 +191,7 @@ func mac_set_fullscreen(state: State*, enabled: bool) -> !:
             origin = LuceWindowMacPoint(x = state.saved_x, y = state.saved_y),
             size = LuceWindowMacExtent(width = state.saved_width, height = state.saved_height)), true)
         state.fullscreen = false
-    push_event(state, input.Event(kind = input.EventKind.resized))
+    note_resize(state)
 
 func mac_pump(waiting: State*):
     let app = application else return
@@ -205,7 +205,7 @@ func mac_pump(waiting: State*):
         msg_object(app, sel("sendEvent:"), event)
         count += 1
         # Return after delivery so the UI can update text focus before the next key.
-        if waiting.count > 0 or waiting.close_requested or waiting.overflowed:
+        if has_event(waiting):
             break
     msg_void(app, sel("updateWindows"))
 
@@ -225,7 +225,7 @@ func mac_wait(waiting: State*, timeout_ns: u64):
         msg_object(app, sel("sendEvent:"), event)
         var count: usize = 0
         while count < 256:
-            if waiting.count > 0 or waiting.close_requested or waiting.overflowed:
+            if has_event(waiting):
                 break
             let more = msg_next(app, sel("nextEventMatchingMask:untilDate:inMode:dequeue:"), ~(u64)0, past, NSDefaultRunLoopMode, true) else break
             msg_object(app, sel("sendEvent:"), more)

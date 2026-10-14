@@ -57,7 +57,7 @@ func x11_dispatch(x: X11Connection, event: XEventBuffer*):
         if width != state.x_width or height != state.x_height:
             state.x_width = width
             state.x_height = height
-            push_event(state, input.Event(kind = input.EventKind.resized))
+            note_resize(state)
     elif kind == x_client_message:
         let message = (XClientEvent*)(void*)event
         if message.message_type == x.wm_protocols and (u64)message.data[0] == x.wm_delete:

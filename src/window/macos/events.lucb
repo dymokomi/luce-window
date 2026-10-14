@@ -20,7 +20,7 @@ func resize_callback(object: void*, selector: void*, notification: void*):
     _ = selector
     _ = notification
     if let state = get_state(object):
-        push_event(state, input.Event(kind = input.EventKind.resized))
+        note_resize(state)
         invoke_redraw(state)
 
 func focus_callback(object: void*, selector: void*, notification: void*):

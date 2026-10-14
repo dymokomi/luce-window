@@ -195,7 +195,7 @@ func win_pump(waiting: State*):
         _ = TranslateMessage(&message)
         _ = DispatchMessageW(&message)
         count += 1
-        if waiting.count > 0 or waiting.close_requested or waiting.overflowed:
+        if has_event(waiting):
             break
 
 ## Block up to `timeout_ns` until input is available (a wake() posts a message) or a

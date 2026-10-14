@@ -18,6 +18,9 @@ struct State:
     var count: usize
     var overflowed: bool
     var close_requested: bool
+    ## A size change not yet delivered: a live resize reports many, and the
+    ## application only needs the last size, so they make one `resized`.
+    var resize_pending: bool
     var presentation_held: bool
     var destroyed: bool
     var text_input: bool
@@ -113,6 +116,15 @@ func note_appearance(state: State*, now: input.Appearance):
     state.shown_appearance = now
     push_event(state, input.Event(kind = input.EventKind.appearance_changed, appearance = now))
 
+## Note that the window's size changed: one `resized` waits however many come
+## before the application reads its events, so a live resize queues nothing more.
+func note_resize(state: State*):
+    state.resize_pending = true
+
+## Whether an event waits to be read.
+func has_event(state: State*) -> bool:
+    return state.count > 0 or state.close_requested or state.overflowed or state.resize_pending
+
 func pop_event(state: State*) -> input.Event?:
     if state.close_requested:
         state.close_requested = false
@@ -120,6 +132,9 @@ func pop_event(state: State*) -> input.Event?:
     if state.overflowed:
         state.overflowed = false
         return input.Event(kind = input.EventKind.overflow)
+    if state.resize_pending:
+        state.resize_pending = false
+        return input.Event(kind = input.EventKind.resized)
     if state.count == 0:
         return none
     let event = state.events[state.head]
@@ -149,3 +164,22 @@ func add_drop_path(state: State*, path: str):
     copy[path.length] = 0
     state.drop_paths[state.drop_count] = (str)copy[..<path.length]
     state.drop_count += 1
+
+test "a live resize queues one resized and loses no input":
+    let state = try new State() in memory.heap
+    defer free(state) in memory.heap
+    # Far more size changes than the queue holds, between a press and its release.
+    push_event(state, input.Event(kind = input.EventKind.key_down, key = input.Key.a))
+    for step in 0..<10000:
+        _ = step
+        note_resize(state)
+    push_event(state, input.Event(kind = input.EventKind.key_up, key = input.Key.a))
+    var resized = 0
+    var keys = 0
+    while let event = pop_event(state):
+        assert(event.kind != input.EventKind.overflow)
+        if event.kind == input.EventKind.resized:
+            resized += 1
+        else:
+            keys += 1
+    assert(resized == 1 and keys == 2 and not has_event(state))
