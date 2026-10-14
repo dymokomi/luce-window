@@ -187,7 +187,8 @@ func math_round(value: f64) -> f64:
 ## Translate queued X events into their windows' queues, stopping once `waiting` has one.
 func x11_pump(waiting: State*):
     let x = x11_connection else return
-    # The portal's appearance signals, on the session bus (linux/appearance.lucb).
+    # The portal's appearance signals, on the session bus (linux/appearance.lucb),
+    # read only once the wait saw the bus readable: not a call per event.
     if dbus_drain():
         linux_announce_appearance()
     var event: XEventBuffer
@@ -224,10 +225,13 @@ func x11_wait(waiting: State*, timeout_ns: u64):
         var count = (u64)watched_count + 2
         # The session bus, for the portal's appearance signals.
         let bus = dbus_descriptor()
+        let bus_slot = count
         if bus >= 0:
             fds[count] = PollFd(fd = bus, events = 1, revents = 0)
             count += 1
         _ = poll(&fds[0], count, milliseconds)
+        if bus >= 0 and fds[(usize)bus_slot].revents != 0:
+            dbus_readable()
         var drained: u8[64]
         while read(x.wake_read, (void*)&drained[0], 64) > 0:
             continue

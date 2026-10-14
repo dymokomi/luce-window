@@ -49,6 +49,9 @@ struct DBusLink:
     var connection: void*?
     var descriptor: i32
     var scheme: input.Appearance
+    ## Whether the bus may have something to read: its descriptor polled ready,
+    ## or the last drain stopped at its limit. Only then does a pump read it.
+    var pending: bool
 
 var dbus_tried: bool
 var dbus_link: DBusLink? = none
@@ -100,7 +103,7 @@ func dbus_connect() -> DBusLink?:
     let connection = api.bus_get_private(0, &problem) else return none
     # libdbus would otherwise end the process when the bus goes away.
     api.set_exit_on_disconnect(connection, 0)
-    var link = DBusLink(api = api, connection = connection, descriptor = -1, scheme = dbus_read_scheme(api, connection))
+    var link = DBusLink(api = api, connection = connection, descriptor = -1, scheme = dbus_read_scheme(api, connection), pending = true)
     api.add_match(connection, "type='signal',interface='org.freedesktop.portal.Settings',member='SettingChanged',arg0='org.freedesktop.appearance',arg1='color-scheme'", &problem)
     var descriptor: i32 = -1
     if api.get_unix_fd(connection, &descriptor) != 0:
@@ -154,11 +157,13 @@ func dbus_scheme_value(api: DBusApi, iterator: DBusIterBuffer*) -> u32?:
         depth += 1
     return none
 
-## Read what the bus sent without blocking; a SettingChanged for color-scheme updates
-## the setting. Returns whether it changed.
+## Read what the bus sent without blocking, when it may have sent something; a
+## SettingChanged for color-scheme updates the setting. Returns whether it changed.
 func dbus_drain() -> bool:
     var link = dbus_link else return false
     let connection = link.connection else return false
+    if not link.pending:
+        return false
     let api = link.api
     let before = link.scheme
     _ = api.read_write(connection, 0)
@@ -170,6 +175,7 @@ func dbus_drain() -> bool:
             if let scheme = dbus_changed_scheme(api, message):
                 link.scheme = portal_appearance(scheme)
         api.message_unref(message)
+    link.pending = count == 64
     dbus_link = link
     return link.scheme != before
 
@@ -202,6 +208,12 @@ func linux_system_appearance() -> input.Appearance:
     if dbus_drain():
         linux_announce_appearance()
     return (dbus_link else link).scheme
+
+## The bus's descriptor polled readable: the next pump reads it.
+func dbus_readable():
+    var link = dbus_link else return
+    link.pending = true
+    dbus_link = link
 
 ## The bus's descriptor for the window's wait, or -1.
 func dbus_descriptor() -> i32:
